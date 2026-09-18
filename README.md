@@ -53,7 +53,7 @@ install for the rest.
 
 | capability | needs |
 |---|---|
-| `build`, `clean`, `size` | `cmake`, `ninja`, `avr-gcc` + `avr-objcopy` (or `arm-none-eabi-gcc`) |
+| `build`, `clean`, `size` | `cmake`, `ninja`, `avr-gcc` + `avr-objcopy` (or `arm-none-eabi-gcc` + newlib — a separate package on Debian/Ubuntu: `libnewlib-arm-none-eabi`) |
 | `flash` (AVR) | `avrdude` |
 | `flash` (ARM) | `pyocd` |
 | `monitor` | `picocom` |

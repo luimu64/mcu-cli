@@ -12,9 +12,9 @@ from . import config as cfgmod
 from . import harness
 from . import scaffold
 from .project import Project
-from .util import (C_DIM, C_OFF, die, have, info, install_hint, need, ok, parse_ms,
-                   parse_portpin, parse_label, pick_port, require, run, serial_ports,
-                   step, warn)
+from .util import (C_DIM, C_OFF, arm_newlib_ok, die, have, info, install_hint, need,
+                   ok, parse_ms, parse_portpin, parse_label, pick_port, require, run,
+                   serial_ports, step, warn)
 
 
 # --------------------------------------------------------------------------
@@ -128,6 +128,11 @@ def cmd_doctor(args, cfg):
             m = re.search(r"(\d+\.\d+(\.\d+)?)", first)
             info(f"  {name:22s} {m.group(1) if m else first[:28]}")
 
+    if have("arm-none-eabi-gcc") and not arm_newlib_ok():
+        warn("arm-none-eabi-gcc has no bare-metal C library (newlib): ARM links "
+             "will fail with 'cannot find -lc'.")
+        info(f"     install: {install_hint('arm-none-eabi-gcc')}")
+
     step("devices")
     ports = serial_ports()
     if ports:
@@ -195,6 +200,12 @@ def do_build(proj: Project, args) -> int:
     require("cmake", args.dry_run)
     require("ninja", args.dry_run)
     require("avr-gcc" if proj.arch == "avr" else "arm-none-eabi-gcc", args.dry_run)
+    if (proj.arch == "arm" and not args.dry_run
+            and have("arm-none-eabi-gcc") and not arm_newlib_ok()):
+        # better here than as a bare "ld: cannot find -lc" halfway through the link
+        warn("arm-none-eabi-gcc cannot find its bare-metal C library (newlib); "
+             "the link would fail with 'cannot find -lc'.")
+        info(f"     install: {install_hint('arm-none-eabi-gcc')}")
     if not proj.configured() or args.reconfigure:
         step(f"configure ({proj.arch}, mcu={proj.mcu}, {proj.freq} Hz)")
         run(proj.configure_cmd(args.build_type), dry=args.dry_run, cwd=proj.dir)

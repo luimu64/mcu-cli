@@ -38,8 +38,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-avr avr-libc binutils-avr gdb-avr \
-            gcc-arm-none-eabi binutils-arm-none-eabi \
+            gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
             cmake ninja-build
+          # Debian/Ubuntu ship gcc-arm-none-eabi WITHOUT newlib; the separate
+          # libnewlib package above is what makes -lc resolvable.
       - name: Install mcu
         run: pip install -e .
       - name: Full suite (build + size + integration tests run for real)

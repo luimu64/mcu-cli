@@ -6,6 +6,16 @@ install anything missing.
 
 ## Build
 
+**`ld: cannot find -lc` (ARM builds).** Debian/Ubuntu package `arm-none-eabi-gcc`
+without the bare-metal C library; newlib is a separate package:
+
+```sh
+sudo apt install libnewlib-arm-none-eabi
+```
+
+`mcu doctor` warns about this, and `mcu build` refuses with the hint before the
+linker gets a chance to fail.
+
 **`unrecognized command line option -mmcu=` / `-mthumb`, or the host compiler complains.**
 The toolchain file was not passed at configure time. Delete `build/` and reconfigure:
 

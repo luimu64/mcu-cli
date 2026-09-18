@@ -72,15 +72,40 @@ _PKG_ALIASES = {
     "avr-gdb": {"apt-get": "gdb-avr", "brew": "avr-gdb"},
     "avr-objcopy": {"apt-get": "binutils-avr", "brew": "avr-binutils"},
     "avr-size": {"apt-get": "binutils-avr", "brew": "avr-binutils"},
-    "arm-none-eabi-gcc": {"apt-get": "gcc-arm-none-eabi", "brew": "arm-none-eabi-gcc"},
+    # Debian/Ubuntu keep the bare-metal C library in its own package: without it
+    # the link fails with "cannot find -lc"
+    "arm-none-eabi-gcc": {"apt-get": "gcc-arm-none-eabi libnewlib-arm-none-eabi",
+                          "brew": "arm-none-eabi-gcc"},
     "arm-none-eabi-gdb": {"apt-get": "gdb-arm-none-eabi", "brew": "arm-none-eabi-gdb"},
+    "arm-none-eabi-size": {"apt-get": "binutils-arm-none-eabi"},
+    "arm-none-eabi-objcopy": {"apt-get": "binutils-arm-none-eabi"},
     "simavr": {"apt-get": "simavr", "brew": "simavr"},
     "qemu-system-avr": {"apt-get": "qemu-system-arm", "brew": "qemu"},
     "picocom": {"apt-get": "picocom", "brew": "picocom"},
     "ninja": {"apt-get": "ninja-build", "brew": "ninja"},
+    "avr-libc": {"apt-get": "avr-libc"},
     "pyocd": {"*": "pipx install pyocd"},
     "probe-rs": {"*": "cargo install probe-rs-tools"},
 }
+
+
+def arm_newlib_ok(compiler="arm-none-eabi-gcc") -> bool:
+    """True when the bare-metal C library is reachable by the ARM compiler.
+
+    Debian/Ubuntu ship gcc-arm-none-eabi without newlib; the linker then fails
+    with `cannot find -lc`. `-print-file-name` echoes the name unchanged when it
+    cannot resolve it, which is the cheapest reliable probe.
+    """
+    path = have(compiler)
+    if not path:
+        return False
+    try:
+        out = subprocess.run([path, "-print-file-name=libc.a"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True, timeout=20).stdout.strip()
+    except Exception:
+        return False
+    return "/" in out
 
 
 def install_hint(tool: str) -> str:

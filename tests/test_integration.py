@@ -35,15 +35,15 @@ def quiet():
 
 
 def build(dest):
-    """Run `mcu build` in-process, returning (rc, combined output)."""
-    from mcu import cli
-    out, err = io.StringIO(), io.StringIO()
-    try:
-        with quiet(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = cli.main(["-C", dest, "build"])
-    except SystemExit as e:
-        rc = e.code if isinstance(e.code, int) else 1
-    return rc, out.getvalue() + err.getvalue()
+    """Run `mcu build` as a subprocess, returning (rc, combined output).
+
+    A subprocess (not redirect_stdout) because cmake/avr-gcc write to the
+    inherited file descriptor — redirecting only Python-level output would hide
+    the compiler error exactly when it matters.
+    """
+    r = subprocess.run([sys.executable, "-m", "mcu", "-C", dest, "build"],
+                       capture_output=True, text=True, timeout=300, env=ENV)
+    return r.returncode, r.stdout + r.stderr
 
 
 def mcu(*argv, timeout=180):
