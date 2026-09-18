@@ -1,0 +1,15 @@
+build/
+sim/generated/
+*.vcd
+*.map
+*.elf
+*.hex
+*.bin
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+dist/
+.idea/
+.vscode/

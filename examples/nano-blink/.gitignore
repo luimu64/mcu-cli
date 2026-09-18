@@ -1,0 +1,5 @@
+build/
+sim/generated/
+*.vcd
+*.map
+__pycache__/
