@@ -14,7 +14,7 @@ from . import scaffold
 from .project import Project
 from .util import (C_DIM, C_OFF, arm_newlib_ok, die, have, info, install_hint, need,
                    ok, parse_ms, parse_portpin, parse_label, pick_port, require, run,
-                   serial_ports, step, warn)
+                   serial_ports, simavr_caps, simavr_note, step, warn)
 
 
 # --------------------------------------------------------------------------
@@ -118,6 +118,7 @@ def cmd_doctor(args, cfg):
                 # --list-cores prints the list and still exits 1; no --version flag
                 cores = [l for l in (out or "").splitlines() if l.strip()]
                 info(f"  {name:22s} ok ({max(len(cores) - 1, 0)} cores, {path})")
+                info(f"  {'simavr flags':22s} {simavr_note(simavr_caps())}")
                 continue
             first = ""
             for line in (out or "").splitlines():
@@ -310,20 +311,40 @@ def cmd_sim(args, cfg):
     proj = project_of(args)
     fw = firmware_of(proj, args)
     require("simavr", args.dry_run)
+    caps = simavr_caps()
 
     cmd = _sim_base(proj, args)
     if args.gdb is not None:
-        cmd += ["-g", str(args.gdb)]
+        if "gdb_port" in caps:
+            cmd += ["-g", str(args.gdb)]
+        elif args.gdb == 1234:
+            cmd += ["-g"]
+            warn("this simavr build takes a bare -g: gdb stub on 1234")
+        else:
+            die("this simavr build has no `-g <port>` (its gdb stub is fixed on "
+                "1234)\n     use --gdb 1234, or build simavr from source")
+
+    sigs = args.signal or []
+    if sigs and "signal" not in caps:
+        warn("this simavr build has no `-at`: signal traces ignored "
+             "(simavr 1.6 has no VCD signal selection)")
+        sigs = []
+
+    out_path = None
     if args.trace:
-        cmd += ["-o", args.trace]
-    for sig in (args.signal or []):
+        if "output" in caps:
+            cmd += ["-o", args.trace]
+        else:
+            # 1.6 has no -o; it writes the VCD on stdout.
+            out_path = args.trace
+    for sig in sigs:
         cmd += ["-at", sig]
     cmd.append(fw)
     if args.seconds:
         cmd = ["timeout", str(args.seconds), *cmd]
 
     step(f"simavr {proj.mcu} @ {proj.freq} Hz")
-    rc, _ = run(cmd, dry=args.dry_run, check=False)
+    rc, _ = run(cmd, dry=args.dry_run, check=False, stdout_path=out_path)
     if rc == 124:
         info(f"{C_DIM}     (stopped after {args.seconds}s of simulated time){C_OFF}")
     return 0
@@ -357,17 +378,29 @@ def cmd_debug(args, cfg):
         die("simulated debug is AVR-only (simavr + avr-gdb); use --hw for a probe")
 
     fw = firmware_of(proj, args)
+    caps = simavr_caps()
     port = args.gdb_port
+    if "gdb_port" not in caps:
+        # simavr 1.6 only takes a bare -g and always listens on 1234.
+        if port != 1234:
+            die("this simavr build has no `-g <port>` (its gdb stub is fixed on "
+                "1234)\n     drop --gdb-port, or build simavr from source to get "
+                "the port argument")
+        warn("this simavr build takes a bare -g: gdb stub on 1234")
+
+    def sim_cmd():
+        c = ["simavr", "-m", proj.mcu, "-f", str(proj.freq)]
+        c += ["-g", str(port)] if "gdb_port" in caps else ["-g"]
+        return c + [fw]
 
     if args.dry_run:
-        info(f"   $ simavr -m {proj.mcu} -f {proj.freq} -g {port} {fw}")
+        info("   $ " + " ".join(sim_cmd()))
         info(f"   $ avr-gdb {fw} -ex 'target remote :{port}'")
         return 0
     need("simavr")
     need("avr-gdb")
-    sim = subprocess.Popen(
-        ["simavr", "-m", proj.mcu, "-f", str(proj.freq), "-g", str(port), fw],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sim = subprocess.Popen(sim_cmd(),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         # Never probe the gdb port with a TCP connect: simavr's stub accepts a
         # single connection, so the probe steals gdb's slot and the real
@@ -424,10 +457,24 @@ def cmd_trace(args, cfg):
     proj = project_of(args)
     fw = firmware_of(proj, args)
     require("simavr", args.dry_run)
+    caps = simavr_caps()
     out = args.output or os.path.join(proj.dir, "trace.vcd")
     sigs = args.signal or DEFAULT_TRACES
 
-    cmd = _sim_base(proj, args) + ["-o", out]
+    if "signal" not in caps:
+        die("this simavr build has no `-at <signal>`, so it cannot select what to "
+            "trace\n     (Debian/Ubuntu ship simavr 1.6 without it). Either build "
+            "simavr from source\n     (https://github.com/buserror/simavr), or "
+            "read the SFRs with `mcu debug`\n     at a breakpoint: x/1xb "
+            "0x800025 = PORTB")
+
+    cmd = _sim_base(proj, args)
+    out_path = None
+    if "output" in caps:
+        cmd += ["-o", out]
+    else:
+        out_path = out                       # 1.6-style build: VCD arrives on stdout
+        warn(f"this simavr build has no -o: writing the VCD to {out} via stdout")
     for s in sigs:
         cmd += ["-at", s]
     cmd.append(fw)
@@ -437,7 +484,7 @@ def cmd_trace(args, cfg):
     step(f"trace -> {out}")
     for s in sigs:
         info(f"     {C_DIM}{s}{C_OFF}")
-    run(cmd, dry=args.dry_run, check=False)
+    run(cmd, dry=args.dry_run, check=False, stdout_path=out_path)
 
     if not args.dry_run and os.path.isfile(out):
         with open(out) as fh:

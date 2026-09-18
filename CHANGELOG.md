@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `mcu debug` / `mcu sim --gdb` failed on simavr builds without the `-g <port>` form
+  (Debian/Ubuntu ship 1.6, whose stub is fixed on 1234): the port number was read as
+  the firmware name and the simulator exited with "gdbserver exited immediately". The
+  optional flags are now probed behaviourally (`simavr_caps`), the bare `-g` is used
+  when that is all the build supports, and asking for another port says so plainly
+  instead of failing.
+- `mcu trace` / `mcu sim --trace` no longer hand `-o`/`-at` to a simavr that has never
+  heard of them (which made simavr try to load the `.vcd` as firmware): unsupported
+  signal traces are refused with an actionable hint, and the VCD is written through
+  stdout when `-o` is missing. `MCU_SIMAVR_FLAGS` overrides the probe.
+- `mcu doctor` reports which of `-g <port>`/`-at`/`-o` the installed simavr accepts.
+- `run()` can redirect a command's stdout to a file (no shell), used for VCDs.
+
 ## [1.0.0] — 2026-09-18
 
 First release.

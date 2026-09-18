@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -81,6 +82,68 @@ class TestMisc(unittest.TestCase):
 
     def test_install_hint_is_a_string(self):
         self.assertIsInstance(util.install_hint("avr-gcc"), str)
+
+
+class TestSimavrCaps(unittest.TestCase):
+    """`mcu debug`/`trace` must know which optional simavr flags exist.
+
+    simavr has no --version, so the probe is behavioural: hand it the flag, a
+    value and a firmware that cannot exist, and see which name it complains
+    about. Debian's simavr 1.6 ignores unknown flags and then tries to load the
+    VALUE as the firmware; a modern build fails on the firmware path instead.
+    """
+
+    def _fake_simavr(self, legacy: bool) -> str:
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "simavr")
+        # $1 = flag, $2 = the flag's value, $3 = the firmware
+        idx = "$2" if legacy else "$3"
+        with open(path, "w") as fh:
+            fh.write(f"#!/bin/sh\necho \"could not read {idx}\" >&2\nexit 1\n")
+        os.chmod(path, 0o755)
+        return path
+
+    def setUp(self):
+        util._simavr_cache.clear()
+        self._env = os.environ.pop("MCU_SIMAVR_FLAGS", None)
+
+    def tearDown(self):
+        util._simavr_cache.clear()
+        if self._env is not None:
+            os.environ["MCU_SIMAVR_FLAGS"] = self._env
+        else:
+            os.environ.pop("MCU_SIMAVR_FLAGS", None)
+
+    def test_modern_build_accepts_every_flag(self):
+        caps = util.simavr_caps(self._fake_simavr(legacy=False))
+        self.assertEqual(caps, {"gdb_port", "signal", "output"})
+
+    def test_legacy_build_reports_nothing(self):
+        self.assertEqual(util.simavr_caps(self._fake_simavr(legacy=True)), set())
+
+    def test_env_override_wins(self):
+        os.environ["MCU_SIMAVR_FLAGS"] = "gdb_port, signal"
+        self.assertEqual(util.simavr_caps("/nonexistent/simavr"),
+                         {"gdb_port", "signal"})
+
+    def test_note_mentions_the_missing_traces(self):
+        self.assertIn("-at", util.simavr_note(set()))
+        self.assertIn("ok", util.simavr_note({"gdb_port", "signal", "output"}))
+
+
+class TestRunStdoutPath(unittest.TestCase):
+    def test_stdout_is_redirected_to_a_file(self):
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "captured.txt")
+        util.run(["echo", "vcd-ish"], check=False, stdout_path=out)
+        with open(out) as fh:
+            self.assertEqual(fh.read().strip(), "vcd-ish")
+
+    def test_dry_run_only_previews(self):
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "never.txt")
+        util.run(["echo", "hi"], dry=True, stdout_path=out)
+        self.assertFalse(os.path.exists(out))
 
 
 if __name__ == "__main__":

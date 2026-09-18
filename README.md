@@ -61,7 +61,12 @@ install for the rest.
 | `debug` (simulated) | `simavr`, `avr-gdb` |
 | `debug --hw` (ARM) | `pyocd`, `arm-none-eabi-gdb` |
 
-simavr has no `--version`; `mcu doctor` reports it by counting the cores it knows.
+simavr has no `--version`; `mcu doctor` reports it by counting the cores it knows, and
+probes which optional flags it accepts. Debian/Ubuntu still ship **simavr 1.6**, which
+has no `-g <port>`, `-at <signal>` or `-o <file>` (it reads the flag's *value* as the
+firmware name) — `mcu` detects that and falls back to the bare `-g` on port 1234 and to
+writing the VCD via stdout, and refuses signal traces with a hint instead of a mystery
+error. Set `MCU_SIMAVR_FLAGS=gdb_port,signal,output` to override the probe.
 
 ## Quick start
 

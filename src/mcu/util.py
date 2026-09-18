@@ -139,11 +139,17 @@ def require(tool: str, dry: bool = False, hint: str | None = None,
     return need(tool, hint=hint, why=why)
 
 
-def run(cmd, dry=False, cwd=None, capture=False, check=True, env=None):
-    """Run a command, streaming output unless `capture` is set."""
+def run(cmd, dry=False, cwd=None, capture=False, check=True, env=None,
+        stdout_path=None):
+    """Run a command, streaming output unless `capture` is set.
+
+    `stdout_path` redirects stdout into a file (no shell involved) — needed by
+    simavr builds that only emit their VCD on stdout.
+    """
     shown = " ".join(str(c) for c in cmd)
     if dry:
-        print(f"{C_DIM}   $ {shown}{C_OFF}")
+        suffix = f" > {stdout_path}" if stdout_path else ""
+        print(f"{C_DIM}   $ {shown}{suffix}{C_OFF}")
         return 0, ""
     if os.environ.get("MCU_VERBOSE"):
         print(f"{C_DIM}   $ {shown}{C_OFF}")
@@ -155,7 +161,11 @@ def run(cmd, dry=False, cwd=None, capture=False, check=True, env=None):
             if check and p.returncode != 0:
                 die(f"command failed ({p.returncode}): {shown}\n{out}")
             return p.returncode, out
-        p = subprocess.run(cmd, cwd=cwd, env=env)
+        if stdout_path:
+            with open(stdout_path, "w") as fh:
+                p = subprocess.run(cmd, cwd=cwd, env=env, stdout=fh)
+        else:
+            p = subprocess.run(cmd, cwd=cwd, env=env)
         if check and p.returncode != 0:
             die(f"command failed ({p.returncode}): {shown}")
         return p.returncode, ""
@@ -164,6 +174,72 @@ def run(cmd, dry=False, cwd=None, capture=False, check=True, env=None):
     except KeyboardInterrupt:
         print()
         die("interrupted", 130)
+
+
+# --------------------------------------------------------------------------
+# simavr capabilities
+# --------------------------------------------------------------------------
+
+# Optional simavr flags, with the value each probe hands over. simavr has no
+# --version and --list-cores exits 1, so the only reliable question is
+# behavioural: give it `<flag> <value> <firmware that cannot exist>` and see which
+# name it complains about. If it fails on the VALUE, the flag does not exist and
+# the value was read as a firmware file name.
+_SIMAVR_PROBES = {
+    "gdb_port": ("-g", "54321"),                 # `-g <port>`; 1.6 wants bare -g
+    "signal":   ("-at", "PROBE=sram8@0x25"),     # VCD signal selection
+    "output":   ("-o", "probe.vcd"),             # VCD file instead of stdout
+}
+_SIMAVR_MODERN = set(_SIMAVR_PROBES)
+_simavr_cache = {}
+
+
+def simavr_caps(simavr="simavr") -> set:
+    """Flags this simavr build accepts, e.g. {'gdb_port', 'signal', 'output'}.
+
+    Debian/Ubuntu still ship simavr 1.6, which knows none of them: it ignores the
+    flag and then treats its value as the firmware to load, so `mcu debug` dies
+    with "gdbserver exited immediately" and `mcu trace` tries to load the .vcd.
+    A modern (source-built) simavr accepts all three.
+
+    Probing never opens a socket or waits: the missing-firmware error comes first.
+    `MCU_SIMAVR_FLAGS` overrides the result for a build the probe misjudges.
+    """
+    override = os.environ.get("MCU_SIMAVR_FLAGS")
+    if override is not None:
+        return {f.strip() for f in override.split(",") if f.strip()}
+
+    path = shutil.which(simavr) or simavr
+    if path in _simavr_cache:
+        return _simavr_cache[path]
+
+    missing = os.path.join(os.sep, "nonexistent-mcu-probe.elf")
+    caps = set()
+    for name, (flag, value) in _SIMAVR_PROBES.items():
+        try:
+            p = subprocess.run([path, flag, value, missing], text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               timeout=10)
+            out = p.stdout or ""
+        except Exception:
+            out = ""
+        if missing in out and value not in out:
+            caps.add(name)                        # the flag swallowed its value
+        elif value in out:
+            pass                                  # flag unknown: value 404'd
+        else:
+            caps.add(name)                        # unknown output: assume modern
+    _simavr_cache[path] = caps
+    return caps
+
+
+def simavr_note(caps) -> str:
+    """One-line capability summary for `mcu doctor`."""
+    if not caps:
+        return "no -g <port>/-at/-o (simavr 1.6: build from source for traces)"
+    if "signal" in caps and "output" in caps:
+        return "traces ok (-at/-o)"
+    return " + ".join(sorted(caps))
 
 
 # --------------------------------------------------------------------------

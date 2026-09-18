@@ -100,6 +100,24 @@ where `mcu` looks. Point it at the prefix:
 export SIMAVR_PREFIX=/usr          # or wherever include/simavr/parts lives
 ```
 
+**`simavr gdbserver exited immediately` / `mcu trace` tries to load your `.vcd`.**
+The installed simavr is too old for the flags used. Debian/Ubuntu still ship
+**simavr 1.6**, which has no `-g <port>`, no `-at <signal>` and no `-o <file>`: it
+ignores the flag and then treats its *value* as the firmware name. `mcu` probes for the
+three flags at runtime (`mcu doctor` prints what it found) and falls back to the bare
+`-g` on port 1234, drops unsupported signal traces and writes the VCD through stdout —
+but a 1.6 simulator cannot select signals at all. Build simavr from source
+(<https://github.com/buserror/simavr>) for full traces, or read SFRs from gdb instead
+(`x/1xb 0x800025` = PORTB). If the probe misjudges a build, force it:
+
+```sh
+MCU_SIMAVR_FLAGS=gdb_port,signal,output mcu trace --seconds 3
+```
+
+**`Remote doesn't know how to detach` at the end of a `--batch` run.** Harmless: simavr
+1.6's gdb stub has no `detach` packet, so gdb says so and quits anyway (`mcu` then
+terminates the simulator). Newer simavr builds detach cleanly.
+
 ## Debug
 
 **`avr-gdb` hangs at `target remote`.** Another client is attached (simavr's stub
