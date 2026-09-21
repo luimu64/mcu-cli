@@ -133,6 +133,44 @@ class TestCliWiring(unittest.TestCase):
                                    "--method", "usbasp"])
         self.assertIn("-c usbasp", out)
 
+    def test_dry_run_flash_icsp_atmel_ice(self):
+        rc, out, _ = self.run_cli(["-C", self.tmp.name, "flash", "-n",
+                                   "--method", "icsp",
+                                   "--programmer", "atmelice_isp", "-B", "10"])
+        self.assertEqual(rc, 0)
+        self.assertIn("icsp (atmelice_isp)", out)
+        self.assertIn("-c atmelice_isp", out)
+        self.assertIn("-p m328p", out)
+        self.assertIn("-B 10", out)
+        self.assertIn("-U flash:w:", out)
+        self.assertNotIn("-D", out)          # no bootloader, no chip-erase flag
+
+    def test_bitclock_keeps_fractional_values(self):
+        _, out, _ = self.run_cli(["-C", self.tmp.name, "flash", "-n",
+                                  "--method", "icsp", "--programmer", "atmelice_dw",
+                                  "--bitclock", "0.5"])
+        self.assertIn("-c atmelice_dw", out)
+        self.assertIn("-B 0.5", out)
+
+    def test_programmer_with_bootloader_is_rejected(self):
+        rc, _, err = self.run_cli(["-C", self.tmp.name, "flash", "-n",
+                                   "--programmer", "atmelice_isp"])
+        self.assertEqual(rc, 1)
+        self.assertIn("--method icsp", err)
+
+    def test_bitclock_with_bootloader_is_rejected(self):
+        rc, _, err = self.run_cli(["-C", self.tmp.name, "flash", "-n",
+                                   "-B", "10"])
+        self.assertEqual(rc, 1)
+        self.assertIn("--method icsp", err)
+
+    def test_programmer_is_ignored_by_the_serial_port_default(self):
+        # --port must only reach avrdude when the user asked for it: the
+        # autodetected bootloader port is not a valid -P for a USB probe.
+        _, out, _ = self.run_cli(["-C", self.tmp.name, "flash", "-n",
+                                  "--method", "icsp", "--programmer", "atmelice_isp"])
+        self.assertNotIn("-P ", out)
+
     def test_no_project_gives_a_clear_error(self):
         # outside the project tree: `mcu` searches upwards, so an empty subdir
         # of a project is still that project

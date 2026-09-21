@@ -50,14 +50,31 @@ sudo usermod -aG uucp "$USER"     # then log out and back in
 USB-serial driver is missing (`dmesg | tail` after plugging it in). `mcu doctor` lists
 what it can see.
 
-**`avrdude: initialization failed, rc=-1`** over ICSP: wiring, target power, or the
-wrong programmer (`-c usbasp` expects a USBasp; a SNAP or Atmel-ICE needs its own
-`-c` name — pass it through with `mcu flash --method usbasp` and adjust, or call
-`avrdude` directly for exotic programmers).
+**`avrdude: initialization failed, rc=-1`** over ISP: wiring, target power, or the wrong
+programmer. `-c usbasp` expects a USBasp; an Atmel-ICE, SNAP, JTAGICE3 or Dragon each
+have their own `-c` id, so name it:
+
+```sh
+mcu flash --method icsp --programmer atmelice_isp -B 10
+```
+
+**The probe is fine but a bare chip never answers.** Check the clock before you check
+the wiring: ISP SCK must stay below a quarter of the target clock, and a factory-fresh
+ATmega328P runs at 1 MHz (internal 8 MHz RC ÷ 8), so avrdude's default is too fast.
+Pass `-B 10` (or slower) and retry. A part whose low fuse selects a crystal answers
+nothing at all when the crystal or its load capacitors are missing. Also make sure the
+ISP header's VTG pin sees the target's own supply — the Atmel-ICE only samples it and
+never powers the target.
+
+**`avrdude` cannot see an Atmel-ICE at all.** USB permissions: add a udev rule for the
+probe's VID:PID (`03eb` is Microchip/Atmel) with `MODE="0660", GROUP="plugdev"`, then
+`udevadm control --reload-rules` and unplug/replug — the rule only applies at plug time.
 
 **Fuses.** `mcu` never writes fuses. Read them first and write them deliberately —
 a wrong `hfuse` on a board with a bootloader bricks the bootloader, not the chip, but
-recovering needs ICSP.
+recovering needs ICSP. Setting `DWEN` (debugWIRE) is the nastiest one: it takes the
+RESET pin away from SPI, so clearing it needs a debugWIRE session (with SPIEN still
+programmed) or high-voltage programming, which the Atmel-ICE cannot do.
 
 ## Monitor
 

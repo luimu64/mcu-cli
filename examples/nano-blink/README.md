@@ -5,7 +5,7 @@ Bare-metal AVR firmware (atmega328p, 16000000 Hz, avr-libc only — no Arduino c
 ```sh
 mcu build      # cmake + ninja -> build/nano_blink.elf/.hex/.bin/.map
 mcu size       # flash/RAM report
-mcu flash      # USB bootloader (--method usbasp for ICSP)
+mcu flash      # USB bootloader (--method icsp for a programmer)
 mcu monitor    # serial console
 mcu sim        # run under simavr
 mcu board --led D13 --button D2 --press 1.5s:150ms --seconds 8

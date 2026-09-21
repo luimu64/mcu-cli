@@ -255,6 +255,9 @@ def cmd_flash(args, cfg):
         part = "m328p" if proj.mcu == "atmega328p" else proj.mcu
 
     if proj.arch == "arm":
+        if args.programmer or args.bitclock:
+            die("--programmer/--bitclock are AVR ISP options — ARM targets flash "
+                "through pyocd over CMSIS-DAP, which is already the probe")
         require("pyocd", args.dry_run, why="it talks to CMSIS-DAP probes")
         step(f"pyocd flash {os.path.basename(proj.elf)}")
         run(["pyocd", "flash", proj.elf], dry=args.dry_run)
@@ -272,6 +275,9 @@ def cmd_flash(args, cfg):
         method = "bootloader"
 
     if method == "bootloader":
+        if args.programmer or args.bitclock:
+            die("--programmer/--bitclock need a hardware programmer — use "
+                "--method icsp (a USB bootloader has no probe and no ISP clock)")
         port = args.port or cfg.get("port") or pick_port(None, dry=args.dry_run)
         cmd = ["avrdude", "-c", "arduino", "-b", str(args.baud),
                "-p", part, "-P", port, "-D", "-U", f"flash:w:{hexf}:i"]
@@ -279,7 +285,20 @@ def cmd_flash(args, cfg):
             die(f"no permission on {port} — add your user to the group owning it "
                 f"(uucp/dialout on most distros)")
     elif method in ("usbasp", "icsp"):
-        cmd = ["avrdude", "-c", "usbasp", "-p", part, "-U", f"flash:w:{hexf}:i"]
+        # One avrdude -c id, defaulting to the old hard-coded usbasp. This is
+        # what makes a bare chip reachable: a probe like the Atmel-ICE is just
+        # another avrdude programmer id (`atmelice_isp` for SPI/ISP,
+        # `atmelice_dw` for a debugWIRE session).
+        prog = args.programmer or "usbasp"
+        method = f"icsp ({prog})"
+        cmd = ["avrdude", "-c", prog, "-p", part]
+        if args.bitclock:
+            # ISP SCK must stay under a quarter of the target clock; a
+            # factory-fresh ATmega328P runs at 1MHz, so the default is too fast.
+            cmd += ["-B", f"{args.bitclock:g}"]
+        if args.port:
+            cmd += ["-P", args.port]
+        cmd += ["-U", f"flash:w:{hexf}:i"]
     else:
         die(f"unknown flash method '{method}'")
 

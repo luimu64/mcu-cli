@@ -74,7 +74,7 @@ error. Set `MCU_SIMAVR_FLAGS=gdb_port,signal,output` to override the probe.
 mcu new blink --led D13 --button D2       # CMake + toolchain + src/main.c
 cd blink
 mcu build                                 # -> build/blink.elf/.hex/.bin + size report
-mcu flash                                 # USB bootloader; --method usbasp for ICSP
+mcu flash                                 # USB bootloader; --method icsp for ICSP
 mcu monitor                               # serial console (autodetects the port)
 ```
 
@@ -91,7 +91,7 @@ Nothing plugged in? Everything except `flash`/`monitor` still works, and
 | `build` | cmake configure (once) + `cmake --build`; `--reconfigure` to force the first step |
 | `clean` | remove `build/` and generated simulation sources |
 | `size` | flash/RAM report (`avr-size --format=avr`, or `arm-none-eabi-size`) |
-| `flash` | `avrdude -c arduino` (bootloader), `-c usbasp` (ICSP), or `pyocd flash` for ARM |
+| `flash` | `avrdude -c arduino` (bootloader), a programmer via `--method icsp` (default `-c usbasp`, `--programmer` for anything else), or `pyocd flash` for ARM |
 | `monitor` | `picocom` on the autodetected port |
 | `sim` | plain simavr run (colourised library UART output) |
 | `board` | simavr **plus peripherals**: LEDs, buttons, scripted/injected serial |
@@ -142,6 +142,38 @@ mcu trace --signal 'PB5=portpin@0x5/0x42' --seconds 2
   hang a script.
 - `sram8`/`sram16` traces record *changes*, not values — pair them with a gdb read at
   a breakpoint to get values with timing.
+
+## Flashing a bare chip over ISP
+
+`--method icsp` hands the job to a real programmer. The programmer id is an avrdude
+`-c` value, so any probe avrdude knows works without a special case:
+
+```sh
+mcu flash --method icsp                                  # -c usbasp (default)
+mcu flash --method icsp --programmer atmelice_isp -B 10  # Atmel-ICE, SPI/ISP
+mcu flash --method icsp --programmer atmelice_dw         # Atmel-ICE, debugWIRE
+mcu flash --method icsp --programmer jtag3isp -P usb     # JTAGICE3
+```
+
+| flag | meaning |
+|---|---|
+| `--programmer ID` | avrdude `-c` id: `usbasp`, `atmelice_isp`, `atmelice_dw`, `jtag3isp`, `dragon_isp`, `usbtiny`, … |
+| `-B US` | avrdude `-B`, the ISP SCK period in microseconds |
+| `--port P` | passed through as avrdude `-P` (`usb` for most USB probes); the bootloader autodetect does not leak into this path |
+
+`--programmer`/`-B` are refused with `--method bootloader` (a bootloader has no probe and
+no ISP clock) and on ARM projects (pyocd is already the probe).
+
+**A factory-fresh part needs `-B`.** ISP SCK must stay below a quarter of the target
+clock, and a new ATmega328P runs on its internal 8 MHz RC divided by 8 = **1 MHz**, so
+avrdude's default is too fast and the chip answers nothing. Start at `-B 10` and only
+speed up once it works. If the low fuse already selects a crystal, the crystal and its
+load capacitors must be fitted or the chip has no clock at all.
+
+Fuses are deliberately not modelled here — `avrdude -U lfuse:w:…` is the tool for that,
+and a wrong low fuse is how a chip stops answering ISP. For the record, the
+ATmega328P defaults are `lfuse=0x62, hfuse=0xD9, efuse=0xFF` (internal 8 MHz ÷8,
+SPIEN on) and `0xFF/0xD9/0xFF` selects a full-swing 16 MHz crystal.
 
 ## Configuration
 

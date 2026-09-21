@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Added
+
+- `mcu flash --programmer ID` picks the avrdude programmer for `--method icsp` instead
+  of the hard-coded `usbasp`, so an Atmel-ICE (`atmelice_isp` for SPI/ISP,
+  `atmelice_dw` for a debugWIRE session), a JTAGICE3 (`jtag3isp`), an AVR Dragon or any
+  other avrdude-known probe works without a special case. Default stays `usbasp`.
+- `mcu flash -B/--bitclock US` passes avrdude's ISP clock period. Needed for a
+  factory-fresh part: SCK must stay under a quarter of the target clock and a new
+  ATmega328P runs at 1 MHz, so the default is too fast.
+- `mcu flash --port` also reaches the programmer path as avrdude `-P` when given
+  explicitly (the bootloader autodetect still does not leak into it).
+- `--programmer`/`-B` are rejected for the bootloader method and on ARM projects
+  instead of being silently ignored.
+
 ### Fixed
 
 - `mcu debug` / `mcu sim --gdb` failed on simavr builds without the `-g <port>` form

@@ -475,7 +475,7 @@ Bare-metal AVR firmware (@MCU@, @FREQ@ Hz, avr-libc only — no Arduino core).
 ```sh
 mcu build      # cmake + ninja -> build/@NAME@.elf/.hex/.bin/.map
 mcu size       # flash/RAM report
-mcu flash      # USB bootloader (--method usbasp for ICSP)
+mcu flash      # USB bootloader (--method icsp for a programmer)
 mcu monitor    # serial console
 mcu sim        # run under simavr
 mcu board --led @LED_LABEL@ --button @BTN_LABEL@ --press 1.5s:150ms --seconds 8

@@ -15,6 +15,7 @@ EPILOG = """\
 examples:
   mcu new blink --led D13 --button D2        scaffold a project
   mcu build && mcu flash && mcu monitor      the normal hardware loop
+  mcu flash --method icsp --programmer atmelice_isp -B 10    bare chip via ISP
   mcu board --led D13 --button D2 --press 1.5s:150ms --rx 1.2s:abc --seconds 8
   mcu debug -x 'break main' -x continue -x bt --batch
   mcu trace --seconds 3 -o ports.vcd
@@ -124,9 +125,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--method", default="auto",
                    choices=["auto", "bootloader", "usbasp", "icsp"],
                    help="bootloader = USB serial; usbasp/icsp = a real programmer")
-    p.add_argument("--port", help="serial port (autodetected)")
+    p.add_argument("--port", help="serial port for the bootloader, or avrdude -P "
+                                  "for a programmer (default: autodetect / usb)")
     p.add_argument("--baud", type=int,
                    help="bootloader baud (official Nano 57600, most clones 115200)")
+    p.add_argument("--programmer", metavar="ID",
+                   help="avrdude -c id for --method icsp (default usbasp), e.g. "
+                        "atmelice_isp, atmelice_dw, jtag3isp, dragon_isp, usbtiny")
+    p.add_argument("-B", "--bitclock", type=float, metavar="US",
+                   help="ISP SCK period in microseconds (avrdude -B); a "
+                        "factory-fresh part runs at 1MHz and needs 10 or slower")
     p.add_argument("--part", help="avrdude part (default derived from the project MCU)")
     p.add_argument("-f", "--file", help="file to flash (default build/*.hex)")
     add_common(p, suppress=True)
