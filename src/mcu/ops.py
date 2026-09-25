@@ -13,10 +13,10 @@ from . import config as cfgmod
 from . import harness
 from . import scaffold
 from .project import Project
-from .util import (C_DIM, C_OFF, arm_newlib_ok, die, have, info, install_hint,
-                   is_avr8x, need, ok, parse_ms, parse_portpin, parse_label,
-                   pick_port, require, run, serial_ports, simavr_caps, simavr_note,
-                   step, warn)
+from .util import (C_DIM, C_OFF, arm_newlib_ok, avr_gcc_supports, die, have, info,
+                   install_hint, is_avr8x, need, ok, parse_ms, parse_portpin,
+                   parse_label, pick_port, require, run, serial_ports, simavr_caps,
+                   simavr_note, step, warn)
 
 
 # --------------------------------------------------------------------------
@@ -209,6 +209,16 @@ def do_build(proj: Project, args) -> int:
         warn("arm-none-eabi-gcc cannot find its bare-metal C library (newlib); "
              "the link would fail with 'cannot find -lc'.")
         info(f"     install: {install_hint('arm-none-eabi-gcc')}")
+    if (proj.arch == "avr" and not args.dry_run and is_avr8x(proj.mcu)
+            and avr_gcc_supports(proj.mcu) is False):
+        # an old distro avr-gcc reports this as a missing file halfway through the
+        # compile ("device-specs/specs-atmega4809: No such file or directory")
+        die(f"this avr-gcc has no {proj.mcu} device spec — megaAVR 0-series and "
+            f"tinyAVR 0/1/2 support needs avr-gcc ≥ 8 (9+ recommended), and this "
+            f"one is {_avr_gcc_version()}.\n"
+            f"     install a newer toolchain (Microchip's AVR toolchain, or "
+            f"'brew install avr-gcc' / a distro with gcc-avr ≥ 8); the code itself "
+            f"is fine: {proj.mcu} builds with a current avr-gcc")
     if not proj.configured() or args.reconfigure:
         step(f"configure ({proj.arch}, mcu={proj.mcu}, {proj.freq} Hz)")
         run(proj.configure_cmd(args.build_type), dry=args.dry_run, cwd=proj.dir)
@@ -679,6 +689,16 @@ def cmd_monitor(args, cfg):
 
 def _sim_base(proj: Project, args) -> list:
     return ["simavr", "-m", args.mcu or proj.mcu, "-f", str(args.freq or proj.freq)]
+
+
+def _avr_gcc_version() -> str:
+    """`avr-gcc -dumpversion` for error messages (name the culprit)."""
+    try:
+        r = subprocess.run(["avr-gcc", "-dumpversion"], capture_output=True,
+                           text=True, timeout=30)
+        return f"{r.stdout.strip() or '?'} (unknown)"
+    except (OSError, subprocess.SubprocessError):
+        return "an unknown version"
 
 
 def no_simulator(proj: Project):

@@ -58,6 +58,26 @@ def have(tool: str):
     return shutil.which(tool)
 
 
+def avr_gcc_supports(mcu: str):
+    """Does the installed avr-gcc know this -mmcu device?
+
+    Distro avr-gcc can be old enough that the device spec is simply missing
+    (Ubuntu ships 7.3.0, which has no megaAVR 0-series: `device-specs/
+    specs-atmega4809: No such file or directory`). Cheap: one compile of an
+    empty file. None = no avr-gcc at all, so caller decides.
+    """
+    if not have("avr-gcc"):
+        return None
+    try:
+        r = subprocess.run(
+            ["avr-gcc", f"-mmcu={mcu}", "-x", "c", "-c", os.devnull,
+             "-o", os.devnull],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.returncode == 0
+
+
 _PKG_MANAGERS = [
     ("pacman", "sudo pacman -S"),
     ("apt-get", "sudo apt install"),
