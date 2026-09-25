@@ -335,10 +335,10 @@ FUSES = ("lfuse", "hfuse", "efuse")
 _DW_RETRY_MARKERS = ("trying debugWIRE", "power-cycling the target")
 
 
-def _avrdude(args_proj, args) -> list:
+def _avrdude(proj, args) -> list:
     """Base avrdude argv: programmer, part, ISP clock, port."""
     prog = args.programmer or "usbasp"
-    part = args.part or ("m328p" if args_proj.mcu == "atmega328p" else args_proj.mcu)
+    part = args.part or ("m328p" if proj.mcu == "atmega328p" else proj.mcu)
     cmd = ["avrdude", "-c", prog, "-p", part]
     if args.bitclock:
         cmd += ["-B", f"{args.bitclock:g}"]
@@ -414,7 +414,7 @@ def cmd_fuses(args, cfg):
     if proj.arch == "arm":
         die("a Cortex-M part has no fuse bytes — fuses are an AVR concept")
     require("avrdude", args.dry_run)
-    base = _avrdude(args, args)
+    base = _avrdude(proj, args)
 
     wanted = {}
     for name in FUSES:

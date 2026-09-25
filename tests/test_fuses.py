@@ -75,8 +75,11 @@ class FusesTest(unittest.TestCase):
         os.chmod(self.avrdude, os.stat(self.avrdude).st_mode | stat.S_IEXEC)
 
         self.log = os.path.join(self.tmp.name, "argv.log")
-        self.env = {**os.environ, "PYTHONPATH": SRC,
-                    "PATH": self.bin + os.pathsep + os.environ["PATH"],
+        # drop any FAKE_* the caller's environment happens to export, so the stub
+        # only ever sees what a test sets here
+        base_env = {k: v for k, v in os.environ.items() if not k.startswith("FAKE_")}
+        self.env = {**base_env, "PYTHONPATH": SRC,
+                    "PATH": self.bin + os.pathsep + base_env["PATH"],
                     "FAKE_AVRDUDE_LOG": self.log,
                     "FAKE_LFUSE": "0x62", "FAKE_HFUSE": "0xD9", "FAKE_EFUSE": "0xFF"}
 
@@ -194,6 +197,18 @@ class FusesTest(unittest.TestCase):
         self.assertIn("lfuse=0x62", r.stdout)
         # three fuse reads, plus one retry of the read that prepared the target
         self.assertEqual(len(self.calls()), 4, self.calls())
+
+    def test_part_comes_from_the_project_not_the_cli_default(self):
+        """`mcu -C <dir> fuses` in a non-328P project must not fall back to the
+        CLI's `args.mcu` default (m328p) — that would program the wrong chip."""
+        big = os.path.join(self.tmp.name, "big")
+        with quiet():
+            scaffold.create(big, name="big", arch="avr", mcu="atmega4809",
+                            freq="20000000")
+        r = self.mcu("-n", "fuses", project=big)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("-p atmega4809", r.stdout)
+        self.assertNotIn("-p m328p", r.stdout)
 
     def test_arm_project_has_no_fuses(self):
         arm = os.path.join(self.tmp.name, "samd")
