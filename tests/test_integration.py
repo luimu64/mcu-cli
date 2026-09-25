@@ -112,6 +112,51 @@ class TestAvrBuild(unittest.TestCase):
         self.assertIn("led edge(s)", combined)
 
 
+@unittest.skipUnless(all(HAVE[t] for t in ("cmake", "ninja", "avr-gcc", "avr-objcopy")),
+                     "needs cmake, ninja, avr-gcc and avr-objcopy")
+class TestAvr8xBuild(unittest.TestCase):
+    """The AVR8X template must actually compile: PORT_t/USART0 are a different
+    register model from classic AVR8, and avr-gcc is the only thing that proves
+    the template got it right."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dest = os.path.join(self.tmp.name, "nano_every")
+        with quiet():
+            scaffold.create(self.dest, name="nano_every", arch="avr",
+                            mcu="atmega4809", freq="20000000",
+                            led="PB5", button="PD2")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_builds_for_megaavr(self):
+        rc, out = build(self.dest)
+        self.assertEqual(rc, 0, out)
+        for name in ("nano_every.elf", "nano_every.hex"):
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, "build", name)),
+                            f"{name} missing\n{out}")
+
+    def test_avr8x_registers_reach_the_object(self):
+        """PORT_t access compiles to the AVR8X I/O addresses, not classic ones."""
+        build(self.dest)
+        r = mcu("-C", self.dest, "size", timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Program:", r.stdout)
+
+    def test_baud_register_is_in_range(self):
+        """Table 1: 20 MHz/115200 -> 694, and the constant must fit the 16-bit
+        BAUD register without truncation warnings (built with -Werror)."""
+        with open(os.path.join(self.dest, "src", "main.c")) as fh:
+            src = fh.read()
+        self.assertIn("#define BAUD_REG ((64UL * F_CPU + 8UL * UART_BAUD) / "
+                      "(16UL * UART_BAUD))", src)
+        self.assertEqual((64 * 20_000_000 + 8 * 115200) // (16 * 115200), 694)
+        rc, out = build(self.dest)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("warning", out.lower())
+
+
 @unittest.skipUnless(all(HAVE[t] for t in ("cmake", "ninja", "arm-none-eabi-gcc",
                                            "arm-none-eabi-objdump")),
                      "needs cmake, ninja and arm-none-eabi-gcc")

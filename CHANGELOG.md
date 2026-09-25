@@ -5,8 +5,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Fixed
+
+- `mcu fuses` took the avrdude part from the CLI's `args.mcu` default instead of the
+  project (`_avrdude(args, args)`): a non-ATmega328P project — an ATmega2560 or an
+  ATmega4809 — was addressed as `-p m328p`, i.e. the wrong chip. The part now comes from
+  the project, and the stub-avrdude tests no longer inherit `FAKE_*` variables from the
+  caller's environment (which made them fail depending on the surrounding shell).
+
 ### Added
 
+- **AVR8X support** (megaAVR 0-series: ATmega4808/4809/3208/3209/808/809/1608/1609;
+  tinyAVR 0/1/2-series, 55 parts) — a different core from classic AVR8, not a rename:
+  `PORT_t` registers, per-pin port interrupts, `USART0`, UPDI instead of ISP, and
+  `fuse0…fuse8` instead of `lfuse`/`hfuse`/`efuse`.
+- `mcu fuses` on an AVR8X part reads the whole 10-byte fuse block in one avrdude read
+  (`fuses` @0x1280) and decodes the bytes by their documented names (WDTCFG, BODCFG,
+  OSCCFG, TCD0CFG, SYSCFG0, SYSCFG1, APPEND, BOOTEND) plus the `OSCCFG`/`SYSCFG0` bit
+  fields. Writes take named bytes: `--fuse SYSCFG0=0xF6`, `--fuse OSCCFG=0x7F`,
+  `--fuse fuse8=0x02` (CODESIZE/BOOTSIZE accepted as aliases of fuse7/fuse8), and the
+  block is read back and re-decoded afterwards. A `SYSCFG0.RSTPINCFG` change warns
+  that PA0 becomes RESET and UPDI entry then needs the debugger's fuse override.
+- AVR8X refusals instead of silent nonsense: `--lfuse/--hfuse/--efuse` are rejected with
+  the byte each one became (clock → OSCCFG, system bits → SYSCFG0/SYSCFG1), `--dwen` is
+  rejected as a classic debugWIRE concept, `--fuse` is rejected on classic parts, and a
+  missing UPDI programmer is reported before avrdude ever runs.
+- `mcu new --mcu atmega4809` (and any AVR8X part) now emits an AVR8X template with its own
+  README: `PORTx.DIRSET/OUTTGL/PINnCTRL`, a `PORTx_PORT_vect` button ISR, `USART0` with
+  the fractional baud register (`BAUD = 64·f_CPU/(16·baud)`, Microchip TB3216; 20 MHz →
+  694, +0.06 %) and UPDI flash instructions. It compiles clean with `-Wall -Wextra`
+  (verified against real avr-gcc for atmega4809 and attiny1616).
+- AVR8X parts are refused by `sim`/`board`/`debug`/`trace` with the reason (simavr has no
+  megaAVR 0 / tinyAVR core) and the bench workflow, instead of simavr's `unknown mcu`.
+  `mcu flash` on an AVR8X part demands `--programmer …_updi` and rejects
+  bootloader/ISP methods.
 - `mcu fuses` — read `lfuse`/`hfuse`/`efuse` (`avrdude -U …:r:…:r`, so there is no
   avrdude text format to guess at) and decode hfuse; write explicit values
   (`--lfuse 0xFF --hfuse 0xD9 --efuse 0xFF`, avrdude's immediate `:m` format) and read

@@ -104,7 +104,7 @@ Nothing plugged in? Everything except `flash`/`monitor` still works, and
 | `clean` | remove `build/` and generated simulation sources |
 | `size` | flash/RAM report (`avr-size --format=avr`, or `arm-none-eabi-size`) |
 | `flash` | `avrdude -c arduino` (bootloader), a programmer via `--method icsp` (default `-c usbasp`, `--programmer` for anything else), or `pyocd flash` for ARM |
-| `fuses` | read `lfuse`/`hfuse`/`efuse` (`avrdude -U`), write them, and flip the debugWIRE `DWEN` bit with `--dwen on\|off` |
+| `fuses` | classic AVR8: read/write `lfuse`/`hfuse`/`efuse` (`avrdude -U`), flip the debugWIRE `DWEN` bit with `--dwen on\|off`. AVR8X: read the `fuse0…fuse8` block over UPDI and write bytes by name (`--fuse SYSCFG0=0xF6`) |
 | `monitor` | `picocom` on the autodetected port |
 | `sim` | plain simavr run (colourised library UART output) |
 | `board` | simavr **plus peripherals**: LEDs, buttons, scripted/injected serial |
@@ -185,15 +185,30 @@ load capacitors must be fitted or the chip has no clock at all.
 
 ## Fuses and debugWIRE (DWEN)
 
-`mcu fuses` reads and writes the three fuse bytes; `--dwen` flips the one bit that
-switches a classic AVR8 between ISP and debugWIRE. Unprogrammed = 1, programmed = 0, so
+`mcu fuses` reads and writes the fuse bytes. There are two families and the command
+picks the right one from the project's MCU:
+
+- **Classic AVR8** (ATmega328P, ATmega2560, …): three bytes `lfuse`/`hfuse`/`efuse`, written
+  over ISP; `--dwen` flips the one bit that switches between ISP and debugWIRE.
+- **AVR8X** (ATmega4809, ATtiny1616, …): one 10-byte block at `0x1280` — `fuse0…fuse8`,
+  named `WDTCFG`, `BODCFG`, `OSCCFG`, `TCD0CFG`, `SYSCFG0`, `SYSCFG1`, `APPEND`,
+  `BOOTEND` — written over **UPDI** (drop the classic `--lfuse/--hfuse/--efuse` habit;
+  the command refuses them and tells you which byte each one became).
+
+Unprogrammed = 1, programmed = 0, so for classic parts
 **DWEN programmed means bit 6 of hfuse is cleared** (ATmega328P: `0xD9` → `0x99`).
 
 ```sh
+# classic AVR8 over ISP
 mcu fuses --programmer atmelice_isp -B 10             # read + decode
 mcu fuses --programmer atmelice_isp -B 10 --dwen on   # enable debugWIRE
 mcu fuses --programmer atmelice_isp -B 10 --dwen off  # back to ISP
 mcu fuses --programmer atmelice_isp -B 10 --lfuse 0xFF --hfuse 0xD9 --efuse 0xFF
+
+# AVR8X over UPDI
+mcu fuses --programmer atmelice_updi                  # read the whole block + decode
+mcu fuses --programmer atmelice_updi --fuse SYSCFG0=0xF6
+mcu fuses --programmer atmelice_updi --fuse OSCCFG=0x7F --fuse fuse8=0x02
 ```
 
 ```
@@ -202,6 +217,14 @@ $ mcu fuses --programmer atmelice_isp -B 10
 lfuse=0x62 hfuse=0xD9 efuse=0xFF
      hfuse bits, classic AVR order: RSTDISBL=1 DWEN=1 SPIEN=0 WDTON=1 EESAVE=1 BOOTSZ1=0 BOOTSZ0=0 BOOTRST=1
      DWEN unprogrammed (debugWIRE off); SPIEN programmed (ISP usable)
+
+$ mcu fuses --programmer atmelice_updi          # ATmega4809, read-only
+==> read fuses
+fuses@0x1280 = 00 00 7E FF FF F6 FF 00 00 00
+     0 WDTCFG=0x00  1 BODCFG=0x00  2 OSCCFG=0x7E  3 FUSE3=0xFF  4 TCD0CFG=0xFF
+     5 SYSCFG0=0xF6  6 SYSCFG1=0xFF  7 APPEND=0x00  8 BOOTEND=0x00  9 FUSE9=0x00
+     OSCCFG (megaAVR 0-series names): FREQSEL=(0x7E & 0x03) >> 0 = 2; OSCLOCK=(0x7E & 0x80) >> 7 = 0
+     SYSCFG0 (megaAVR 0-series names): EESAVE=(0xF6 & 0x01) >> 0 = 0; RSTPINCFG=(0xF6 & 0x08) >> 3 = 0 (PA0 is a plain I/O pin); CRCSRC=(0xF6 & 0xc0) >> 6 = 3
 ```
 
 - `--dwen on|off` is a read-modify-write: it reads the current hfuse first (so only bit 6
@@ -224,6 +247,27 @@ lfuse=0x62 hfuse=0xD9 efuse=0xFF
   `lfuse=0x62, hfuse=0xD9, efuse=0xFF` (internal 8 MHz ÷ 8, SPIEN on) and
   `0xFF/0xD9/0xFF` selects a full-swing 16 MHz crystal. Read the datasheet table before
   writing anything — a wrong low fuse is how a chip stops answering ISP.
+
+### AVR8X: there is no DWEN, and no lfuse
+
+Two things are *structurally* different, not just renamed:
+
+- **No DWEN.** AVR8X debugs over UPDI from reset — there is nothing to enable, so
+  `--dwen` is refused instead of being accepted as a no-op. The nearest equivalent is
+  `SYSCFG0.RSTPINCFG` (bit 3): `0` = PA0 is a plain I/O pin (the ATmega4809 default,
+  `FUSE_SYSCFG0_DEFAULT 0xF6`), `1` = PA0 drives RESET for the application — after which
+  a debugger needs the **"UPDI enable with fuse override"** sequence to get back in.
+  `mcu fuses --fuse SYSCFG0=0xFE` warns in exactly that direction before writing.
+- **No ISP path at all.** AVR8X has no serial bootloader and no ISP, so `mcu flash`
+  demands a UPDI programmer (`atmelice_updi`, `serialupdi`, `jtag2updi`, or the
+  Curiosity Nano's `pkobn_updi`) rather than silently trying `usbasp`:
+  `mcu flash --method icsp --programmer atmelice_updi`.
+- The bit names printed for `OSCCFG`/`SYSCFG0` are the **megaAVR 0-series** ones (verified
+  against avr-libc's `iom4809.h`: `EESAVE` bit 0, `RSTPINCFG` bit 3, `CRCSRC` bits 7:6,
+  `FREQSEL` bits 1:0, `OSCLOCK` bit 7). tinyAVR 2-series move them (e.g.
+  `SYSCFG0.UPDIPINCFG`) — read that part's datasheet before writing.
+- `fuse3`/`fuse4` are absent on some parts and `CODESIZE`/`BOOTSIZE` are the same bytes as
+  `APPEND`/`BOOTEND`: `--fuse CODESIZE=0x01` writes `fuse7`.
 
 ## Configuration
 
@@ -270,10 +314,14 @@ untested (WSL2 should work). Serial-port discovery covers `/dev/ttyUSB*`,
 
 ## Limitations
 
-- Simulated debugging (`sim`, `board`, `debug`, `trace`) is AVR-only: simavr is an AVR
-  simulator. Cortex-M flashing/debugging needs real hardware.
-- The scaffolder targets ATmega328P-class parts (the demo uses `UCSR0A`/`PCINT`
-  registers); other parts build and flash fine, but edit the UART/interrupt code.
+- Simulated debugging (`sim`, `board`, `debug`, `trace`) is AVR-only *and* classic-AVR8-only:
+  simavr has no megaAVR 0-series / tinyAVR 0–2 core, so AVR8X parts are refused with a hint
+  instead of a mystery (`mcu flash` + `mcu monitor` is the AVR8X workflow). Cortex-M
+  flashing/debugging needs real hardware.
+- The scaffolder emits two templates and picks by MCU: classic AVR8 (`UCSR0A`/`PCINT`) and
+  AVR8X (`USART0`/`PORTx.PINnCTRL`). Both compile clean with `-Wall -Wextra`; other parts
+  build and flash fine, but check the UART/interrupt registers of a family that has
+  neither (e.g. older ATtiny).
 - `mcu` does not manage toolchain installation — `mcu doctor` tells you what to install.
 
 ## Development

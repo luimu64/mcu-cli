@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import os
 
-from .util import die, info, ok, parse_label, parse_portpin, pcint_for
+from .util import (avr8x_ports, die, info, is_avr8x, ok, parse_label,
+                   parse_portpin, pcint_for)
 
 
 def render(text: str, **kw) -> str:
@@ -369,6 +370,130 @@ ARM_DEBUG_JSON = """\
 ]
 """
 
+# --------------------------------------------------------------------------
+# AVR8X (megaAVR 0-series, tinyAVR 0/1/2-series) — same role, different core:
+# PORT_t registers, per-pin port interrupts, USART0, UPDI, fuse0..fuse8.
+# --------------------------------------------------------------------------
+
+AVR8X_MAIN = """\
+/*
+ * @NAME@ — bare-metal AVR8X skeleton (avr-libc only, no Arduino core).
+ *
+ *   @LED_LABEL@ LED -> P@LED_PORT@@LED_BIT@
+ *   @BTN_LABEL@ button -> P@BTN_PORT@@BTN_BIT@ : to GND, internal pull-up, pin interrupt
+ *   TXD/RXD -> USART0 (UPDI sits on its own pin, PA0)
+ *
+ * `mcu build`, then flash over UPDI:
+ *   mcu flash --method icsp --programmer atmelice_updi
+ * simavr has no AVR8X core, so `mcu sim`/`board`/`debug`/`trace` are classic-AVR8
+ * only — this part is bench-tested through the UART (`mcu monitor`) instead.
+ * Everything above the marked block is plumbing; your firmware goes inside it.
+ */
+
+#ifndef F_CPU
+#define F_CPU @FREQ@UL
+#endif
+#define UART_BAUD @BAUD@UL
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <stdio.h>
+#include <util/delay.h>
+
+#define LED_PORT  PORT@LED_PORT@
+#define LED_BIT   PIN@LED_BIT@_bm
+
+#define BTN_PORT  PORT@BTN_PORT@
+#define BTN_BIT   PIN@BTN_BIT@_bm
+
+/* There is no UBRRn on AVR8X: the fractional baud generator takes
+ * BAUD = 64 * f_CPU / (16 * baud), rounded (Microchip TB3216, 16x mode).
+ * 16 MHz/115200 -> 556 (115107 Bd, -0.08 %), 20 MHz/115200 -> 694.
+ * (The macro must not be called BAUD: `USART0.BAUD` is a register here.) */
+#define BAUD_REG ((64UL * F_CPU + 8UL * UART_BAUD) / (16UL * UART_BAUD))
+
+static int uart_putchar(char c, FILE *stream)
+{
+    (void)stream;
+    if (c == '\\n') {
+        uart_putchar('\\r', stream);
+    }
+    while (!(USART0.STATUS & USART_DREIF_bm)) {
+    }
+    USART0.TXDATAL = (uint8_t)c;
+    return 0;
+}
+static FILE uart_stdout = FDEV_SETUP_STREAM(uart_putchar, NULL, _FDEV_SETUP_WRITE);
+
+static void io_init(void)
+{
+    USART0.BAUD = (uint16_t)BAUD_REG;               /* 8N1, 16x oversampling */
+    USART0.CTRLB = USART_TXEN_bm | USART_RXEN_bm;
+
+    LED_PORT.DIRSET = LED_BIT;
+    BTN_PORT.DIRCLR = BTN_BIT;
+    BTN_PORT.PIN@BTN_BIT@CTRL = PORT_PULLUPEN_bm | PORT_ISC_FALLING_gc;
+    sei();
+}
+
+/* The ISR only latches the event: printing from interrupt context is not safe,
+ * and a polling loop would miss a short press. On AVR8X every pin has its own
+ * interrupt, but the whole port still shares one vector. */
+volatile uint8_t button_pressed;
+
+ISR(PORT@BTN_PORT@_PORT_vect)
+{
+    if (!(BTN_PORT.IN & BTN_BIT)) {         /* pull-up high = released */
+        button_pressed = 1;
+    }
+}
+
+int main(void)
+{
+    io_init();
+
+    for (;;) {
+        /* ---------------------- YOUR CODE HERE ----------------------
+         * Demo heartbeat, so the UART shows something before you write
+         * yours: replace this whole block.
+         */
+        if (button_pressed) {
+            button_pressed = 0;
+            fprintf(&uart_stdout, "press\\n");
+        }
+        if (USART0.STATUS & USART_RXCIF_bm) {   /* demo: echo serial input */
+            uart_putchar(USART0.RXDATAL, &uart_stdout);
+            uart_putchar('\\n', &uart_stdout);
+        }
+        LED_PORT.OUTTGL = LED_BIT;
+        fprintf(&uart_stdout, "tick\\n");
+        _delay_ms(500);
+        /* ---------------------- END OF DEMO ---------------------- */
+    }
+}
+"""
+
+AVR8X_README = """\
+# @NAME@
+
+Bare-metal AVR8X firmware (@MCU@, @FREQ@ Hz, avr-libc only — no Arduino core).
+
+```sh
+mcu build                                    # cmake + ninja -> build/@NAME@.elf/.hex/.bin
+mcu size                                     # flash/RAM report
+mcu fuses --programmer atmelice_updi         # fuse0..fuse8 (there is no lfuse/hfuse)
+mcu flash --method icsp --programmer atmelice_updi   # UPDI, not ISP
+mcu monitor                                  # serial console
+```
+
+Hardware map: LED on P@LED_PORT@@LED_BIT@ (@LED_LABEL@), button on P@BTN_PORT@@BTN_BIT@
+(@BTN_LABEL@, internal pull-up, per-pin port interrupt), UART at @BAUD@ Bd on USART0.
+
+No simulation: simavr emulates classic AVR8 only, so `mcu sim`, `board`, `debug` and
+`trace` do not apply to this part — bench-test through the UART instead.
+"""
+
+
 GITIGNORE = """\
 build/
 sim/generated/
@@ -398,9 +523,12 @@ def create(dest: str, *, name=None, arch="avr", mcu="atmega328p", freq="16000000
     name = name or os.path.basename(os.path.normpath(dest))
 
     if arch == "avr":
-        led_port, led_bit = parse_portpin(led)
-        btn_port, btn_bit = parse_portpin(button)
-        group, num = pcint_for(btn_port, btn_bit)
+        avr8x = is_avr8x(mcu)
+        led_port, led_bit = parse_portpin(led, ports=avr8x_ports(mcu) if avr8x else None)
+        btn_port, btn_bit = parse_portpin(button, ports=avr8x_ports(mcu) if avr8x else None)
+        # AVR8X interrupts every pin individually (PORTx.PINnCTRL + one port
+        # vector), so the classic PCINT group maths does not apply there.
+        group, num = (None, None) if avr8x else pcint_for(btn_port, btn_bit)
         tok = dict(name=name, mcu=mcu, freq=freq, baud=baud,
                    led_port=led_port, led_bit=led_bit,
                    led_label=parse_label(led, led_port, led_bit),
@@ -410,9 +538,9 @@ def create(dest: str, *, name=None, arch="avr", mcu="atmega328p", freq="16000000
         files = {
             "CMakeLists.txt": render(AVR_CMAKELISTS, **tok),
             "avr-gcc.cmake": AVR_TOOLCHAIN,
-            "src/main.c": render(AVR_MAIN, **tok),
+            "src/main.c": render(AVR8X_MAIN if is_avr8x(mcu) else AVR_MAIN, **tok),
         }
-        readme = AVR_README
+        readme = AVR8X_README if is_avr8x(mcu) else AVR_README
     elif arch == "arm":
         tok = dict(name=name, cpu=cpu, float_abi=float_abi,
                    ldscript=f"{name}.ld", chip=chip or "ATSAMD21J18A",

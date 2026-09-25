@@ -95,6 +95,109 @@ class TestAvrScaffold(unittest.TestCase):
         self.assertIn('set(F_CPU "14745600"', cmake)
 
 
+class TestAvr8xScaffold(unittest.TestCase):
+    """`mcu new --mcu atmega4809` must emit AVR8X code, not classic AVR8 code:
+    PORT_t registers, per-pin port interrupts, USART0, and a README that says
+    UPDI instead of ISP."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dest = os.path.join(self.tmp.name, "nano_every")
+        with quiet():
+            scaffold.create(self.dest, name="nano_every", arch="avr",
+                            mcu="atmega4809", freq="20000000",
+                            led="PB5", button="PD2")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def read(self, rel):
+        with open(os.path.join(self.dest, rel)) as fh:
+            return fh.read()
+
+    def test_no_unsubstituted_tokens(self):
+        for rel in ("CMakeLists.txt", "src/main.c", "README.md"):
+            self.assertNotIn("@", self.read(rel), f"token left in {rel}")
+
+    def test_port_t_register_model(self):
+        src = self.read("src/main.c")
+        self.assertIn("#define LED_PORT  PORTB", src)
+        self.assertIn("#define LED_BIT   PIN5_bm", src)
+        self.assertIn("#define BTN_PORT  PORTD", src)
+        self.assertIn("#define BTN_BIT   PIN2_bm", src)
+        self.assertIn("LED_PORT.DIRSET = LED_BIT", src)
+        self.assertIn("LED_PORT.OUTTGL = LED_BIT", src)
+        self.assertIn("BTN_PORT.PIN2CTRL = PORT_PULLUPEN_bm | PORT_ISC_FALLING_gc",
+                      src)
+
+    def test_per_pin_interrupt_on_the_port_vector(self):
+        src = self.read("src/main.c")
+        self.assertIn("ISR(PORTD_PORT_vect)", src)
+        self.assertIn("if (!(BTN_PORT.IN & BTN_BIT))", src)
+        self.assertNotIn("PCMSK", src)               # that is classic AVR8
+
+    def test_usart0_and_no_ubrr(self):
+        src = self.read("src/main.c")
+        self.assertIn("USART0.BAUD = (uint16_t)BAUD_REG", src)
+        self.assertIn("USART0.CTRLB = USART_TXEN_bm | USART_RXEN_bm", src)
+        self.assertIn("USART0.TXDATAL = (uint8_t)c", src)
+        self.assertIn("USART0.RXDATAL", src)
+        self.assertNotIn("UCSR0A", src)
+        self.assertNotIn("UBRR0", src)                # the comment may say "no UBRRn"
+        # the macro must not be named BAUD: `USART0.BAUD` is a register here
+        self.assertNotIn("#define BAUD ", src)
+
+    def test_baud_math_matches_the_header_formula(self):
+        src = self.read("src/main.c")
+        self.assertIn("#define UART_BAUD 115200UL", src)
+        self.assertIn("#define BAUD_REG ((64UL * F_CPU + 8UL * UART_BAUD) / "
+                      "(16UL * UART_BAUD))", src)
+        reg = (64 * 20_000_000 + 8 * 115200) // (16 * 115200)
+        self.assertEqual(reg, 694)                   # 20 MHz -> 694 (115273 Bd)
+        self.assertEqual((64 * 16_000_000 + 8 * 115200) // (16 * 115200), 556)
+
+    def test_main_marks_the_replaceable_block(self):
+        src = self.read("src/main.c")
+        self.assertEqual(src.count("YOUR CODE HERE"), 1)
+        self.assertLess(len(src.splitlines()), 100)
+
+    def test_readme_talks_udpi_and_no_simulation(self):
+        md = self.read("README.md")
+        self.assertIn("atmelice_updi", md)
+        self.assertIn("UPDI, not ISP", md)
+        self.assertIn("No simulation", md)
+        self.assertNotIn("mcu board --led", md)      # no sim -> no board harness
+
+    def test_tinyavr_also_gets_the_avr8x_template(self):
+        dest = os.path.join(self.tmp.name, "tiny")
+        with quiet():
+            scaffold.create(dest, name="tiny", arch="avr", mcu="attiny1616",
+                            freq="16000000", led="PB5", button="PA2")
+        with open(os.path.join(dest, "src/main.c")) as fh:
+            src = fh.read()
+        self.assertIn("ISR(PORTA_PORT_vect)", src)
+        self.assertIn("USART0.BAUD", src)
+
+    def test_classic_parts_keep_the_classic_template(self):
+        dest = os.path.join(self.tmp.name, "uno")
+        with quiet():
+            scaffold.create(dest, name="uno", arch="avr", mcu="atmega328p")
+        with open(os.path.join(dest, "src/main.c")) as fh:
+            src = fh.read()
+        self.assertIn("ISR(PCINT2_vect)", src)
+        self.assertIn("UCSR0A", src)
+
+    def test_atmega2560_is_not_avr8x(self):
+        dest = os.path.join(self.tmp.name, "mega")
+        with quiet():
+            scaffold.create(dest, name="mega", arch="avr", mcu="atmega2560",
+                            freq="14745600")
+        with open(os.path.join(dest, "src/main.c")) as fh:
+            src = fh.read()
+        self.assertNotIn("PORTB.DIRSET", src)
+        self.assertIn("UBRR0H", src)                  # classic USART, not USART0
+
+
 class TestArmScaffold(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

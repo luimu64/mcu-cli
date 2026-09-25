@@ -269,9 +269,49 @@ ARDUINO_LABELS = {
 # PCINT group per port: PB -> PCINT0..7, PC -> 8..15, PD -> 16..23
 PCINT_GROUP = {"B": 0, "C": 1, "D": 2}
 
+# AVR8X — megaAVR 0-series and tinyAVR 0/1/2-series. Different core from classic
+# AVR8: PORT_t registers instead of PORTB bytes, per-pin port interrupts, USART0
+# instead of UCSR0, UPDI instead of ISP, and fuse0..fuse8 instead of
+# lfuse/hfuse/efuse. Names are the lowercase avr-gcc/CMake spellings.
+AVR8X_PARTS = frozenset("""
+    atmega808 atmega809 atmega1608 atmega1609 atmega3208 atmega3209
+    atmega4808 atmega4809
+    attiny202 attiny204 attiny402 attiny404 attiny406 attiny412 attiny414
+    attiny416 attiny417 attiny212 attiny214
+    attiny804 attiny806 attiny807 attiny814 attiny816 attiny817
+    attiny1604 attiny1606 attiny1607 attiny1614 attiny1616 attiny1617
+    attiny424 attiny426 attiny427 attiny824 attiny826 attiny827
+    attiny1624 attiny1626 attiny1627 attiny3216 attiny3217 attiny3224
+    attiny3226 attiny3227
+""".split())
 
-def parse_portpin(spec):
-    """'PB5' / 'B5' / 'PB:5' / 'D13' / 'A0' -> (port letter, bit)."""
+
+def is_avr8x(mcu) -> bool:
+    """True for megaAVR 0-series / tinyAVR 0,1,2-series parts."""
+    name = str(mcu or "").strip().lower().replace("_", "")
+    if name.endswith("auto"):                 # ATtiny1614auto is the same silicon
+        name = name[:-4]
+    return name in AVR8X_PARTS
+
+
+# megaAVR 0-series (4808/4809/…) pack PORTA..PORTF; tinyAVR 0/1/2-series PORTA..PORTC
+MEGA_PORTS = ("A", "B", "C", "D", "E", "F")
+TINY_PORTS = ("A", "B", "C")
+
+
+def avr8x_ports(mcu) -> tuple:
+    """Port letters that exist on this AVR8X part (PA0..PF5 on the megaAVR 0)."""
+    name = str(mcu or "").strip().lower()
+    return MEGA_PORTS if name.startswith("atmega") else TINY_PORTS
+
+
+def parse_portpin(spec, ports=None):
+    """'PB5' / 'B5' / 'PB:5' / 'D13' / 'A0' -> (port letter, bit).
+
+    `ports` restricts the allowed port letters (AVR8X passes its own set, since
+    every pin there is individually interrupt-capable and PORTF exists on the
+    megaAVR 0-series); None keeps the classic Arduino-label behaviour.
+    """
     s = str(spec).upper().strip()
     if s in ARDUINO_LABELS:
         return ARDUINO_LABELS[s]
@@ -279,7 +319,10 @@ def parse_portpin(spec):
     if not m:
         die(f"cannot parse port pin '{spec}' "
             f"(use PB5, D13, A0 or the explicit form PB:5)")
-    return m.group(1), int(m.group(2))
+    port, bit = m.group(1), int(m.group(2))
+    if ports and port not in ports:
+        die(f"that part has ports {', '.join('P' + p for p in ports)} — not P{port}")
+    return port, bit
 
 
 def parse_label(spec, port, bit) -> str:

@@ -13,9 +13,10 @@ from . import config as cfgmod
 from . import harness
 from . import scaffold
 from .project import Project
-from .util import (C_DIM, C_OFF, arm_newlib_ok, die, have, info, install_hint, need,
-                   ok, parse_ms, parse_portpin, parse_label, pick_port, require, run,
-                   serial_ports, simavr_caps, simavr_note, step, warn)
+from .util import (C_DIM, C_OFF, arm_newlib_ok, die, have, info, install_hint,
+                   is_avr8x, need, ok, parse_ms, parse_portpin, parse_label,
+                   pick_port, require, run, serial_ports, simavr_caps, simavr_note,
+                   step, warn)
 
 
 # --------------------------------------------------------------------------
@@ -266,6 +267,16 @@ def cmd_flash(args, cfg):
             ok("flashed")
         return 0
 
+    if is_avr8x(proj.mcu):
+        if args.method in ("auto", "bootloader"):
+            die(f"{proj.mcu} is AVR8X: it has no ISP and no serial bootloader — "
+                f"it is programmed over UPDI.\n"
+                f"     mcu flash --method icsp --programmer atmelice_updi")
+        if not args.programmer:
+            die(f"{proj.mcu} is AVR8X: pass the UPDI programmer explicitly "
+                f"(there is no ISP to fall back on):\n"
+                f"     mcu flash --method icsp --programmer atmelice_updi")
+
     require("avrdude", args.dry_run)
     hexf = args.file or proj.hex
     if not os.path.isfile(hexf) and not args.dry_run:
@@ -409,11 +420,172 @@ def _hfuse_report(value) -> list:
             f"     DWEN {dwen}; SPIEN {spien}"]
 
 
+# --------------------------------------------------------------------------
+# AVR8X fuses: one 10-byte block at 0x1280 (avrdude memory "fuses"), no
+# lfuse/hfuse/efuse, and the part is reachable over UPDI only.
+# --------------------------------------------------------------------------
+
+AVR8X_FUSE_BLOCK = 0x1280
+AVR8X_FUSES = ("WDTCFG", "BODCFG", "OSCCFG", "FUSE3", "TCD0CFG", "SYSCFG0",
+               "SYSCFG1", "APPEND", "BOOTEND", "FUSE9")
+AVR8X_ALIASES = {"CODESIZE": 7, "BOOTSIZE": 8}     # same bytes, other datasheet name
+AVR8X_CLASSIC_NAMES = {                            # what a classic user reaches for
+    "lfuse": "OSCCFG (fuse2) holds the clock select",
+    "hfuse": "SYSCFG0/SYSCFG1 (fuse5/fuse6) hold the system bits",
+    "efuse": "BODCFG/APPEND/BOOTEND cover what efuse did",
+}
+# megaAVR 0-series bit names for the two bytes that actually bite
+AVR8X_BIT_FIELDS = {
+    "OSCCFG": (("FREQSEL", 0, 0x03), ("OSCLOCK", 7, 0x80)),
+    "SYSCFG0": (("EESAVE", 0, 0x01), ("RSTPINCFG", 3, 0x08), ("CRCSRC", 6, 0xC0)),
+}
+AVR8X_UPDI_PROGRAMMERS = ("atmelice_updi", "serialupdi", "jtag2updi", "pkobn_updi",
+                          "pickit4_updi", "pickit5_updi")
+
+
+def _avr8x_fuse_index(name) -> int:
+    key = str(name).strip().upper()
+    if key in AVR8X_ALIASES:
+        return AVR8X_ALIASES[key]
+    m = re.fullmatch(r"FUSE([0-9])", key)
+    if m:
+        return int(m.group(1))
+    if key in AVR8X_FUSES:
+        return AVR8X_FUSES.index(key)
+    die(f"unknown AVR8X fuse '{name}' (use fuse0..fuse9 or one of "
+        f"{', '.join(AVR8X_FUSES)}; CODESIZE/BOOTSIZE are fuse7/fuse8)")
+
+
+def _read_fuse_block(base, dry):
+    """The whole AVR8X fuse block in one read: avrdude's `fuses` memory."""
+    if dry:
+        run(base + ["-U", "fuses:r:<tmpfile>:r"], dry=True)
+        return None
+    with tempfile.TemporaryDirectory(prefix="mcu-fuse-") as td:
+        path = os.path.join(td, "fuses")
+        rc, out = _avrdude_retry(base + ["-U", f"fuses:r:{path}:r"], dry, "fuses")
+        if rc:
+            die(f"could not read the fuse block (avrdude exit {rc})"
+                + (f"\n{out.strip()}" if out.strip() else ""))
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            data = b""
+        if not data:
+            die("avrdude reported success but wrote no fuse data — check the "
+                "programmer id (`--programmer atmelice_updi` for UPDI), the wiring "
+                "and the target's supply")
+        return data
+
+
+def _avr8x_report(data) -> list:
+    shown = " ".join(f"{b:02X}" for b in data)
+    lines = [f"fuses@{AVR8X_FUSE_BLOCK:#06x} = {shown}"]
+    names = []
+    for i, b in enumerate(data):
+        name = AVR8X_FUSES[i] if i < len(AVR8X_FUSES) else f"FUSE{i}"
+        names.append(f"{i} {name}=0x{b:02X}")
+    for chunk in (names[:5], names[5:10], names[10:]):
+        if chunk:
+            lines.append("     " + "  ".join(chunk))
+    for i, name in enumerate(AVR8X_FUSES):
+        if i in (2, 5) and i < len(data):            # OSCCFG, SYSCFG0
+            bits = []
+            for field, pos, mask in AVR8X_BIT_FIELDS[name]:
+                value = (data[i] & mask) >> pos
+                text = f"{field}=(0x{data[i]:02X} & {mask:#04x}) >> {pos} = {value}"
+                if field == "RSTPINCFG":             # header: GPIO_gc / RST_gc
+                    text += (" (PA0 is a plain I/O pin)" if value == 0
+                             else " (PA0 drives RESET — UPDI entry then needs the "
+                                  "debugger's fuse override)")
+                bits.append(text)
+            lines.append(f"     {name} (megaAVR 0-series names): " + "; ".join(bits))
+    lines.append("     bit names above are megaAVR 0-series; tinyAVR 2-series move "
+                 "them (e.g. SYSCFG0.UPDIPINCFG) — check that part's datasheet")
+    return lines
+
+
+def _fuses_avr8x(proj, args):
+    if not args.programmer:
+        die(f"{proj.mcu} is an AVR8X part: it has no ISP, it is programmed over "
+            f"UPDI.\n     pass a UPDI programmer: "
+            + ", ".join(f"-c {p}" for p in AVR8X_UPDI_PROGRAMMERS[:3]))
+    base = _avrdude(proj, args)
+
+    for name in FUSES:                               # --lfuse / --hfuse / --efuse
+        if getattr(args, name, None) is not None:
+            die(f"AVR8X has no {name} (that is the classic AVR8 naming): "
+                f"{AVR8X_CLASSIC_NAMES[name]}.\n     write the byte instead: "
+                f"mcu fuses --fuse {name.replace('lfuse', 'OSCCFG').replace('hfuse', 'SYSCFG0').replace('efuse', 'BODCFG')}=0x..")
+    if args.dwen:
+        die("--dwen is a classic AVR8 fuse (debugWIRE). AVR8X debugs over UPDI, "
+            "which needs no fuse.\n     the SYSCFG0 equivalent is RSTPINCFG "
+            "(bit 3): it hands PA0 to RESET/the application, and a debugger then "
+            "needs the 'UPDI enable with fuse override' sequence to get back in.")
+
+    wanted = {}
+    for spec in args.fuse or []:
+        name, _, text = str(spec).partition("=")
+        if not _:
+            die(f"--fuse wants NAME=HEX, got '{spec}' (e.g. --fuse SYSCFG0=0xF6)")
+        index = _avr8x_fuse_index(name)
+        wanted[index] = _fuse_value(text, name)
+
+    if not wanted:                                   # read
+        step("read fuses")
+        if args.dry_run:
+            _read_fuse_block(base, True)
+            return 0
+        data = _read_fuse_block(base, False)
+        for line in _avr8x_report(data):
+            info(line)
+        return 0
+
+    before = None
+    if not args.dry_run:
+        before = _read_fuse_block(base, False)
+        if 5 in wanted and before and 5 < len(before) and \
+                (before[5] & 0x08) != (wanted[5] & 0x08):
+            warn("SYSCFG0.RSTPINCFG "
+                 f"{(before[5] & 0x08) >> 3} -> {(wanted[5] & 0x08) >> 3}: "
+                 + ("PA0 becomes RESET for the application, so UPDI entry then "
+                    "needs the debugger's 'UPDI enable with fuse override' "
+                    "sequence" if (wanted[5] & 0x08) else
+                    "PA0 stops driving RESET (GPIO mode)"))
+        for i in sorted(wanted):
+            current = before[i] if i < len(before) else None
+            if current is not None:
+                info(f"{AVR8X_FUSES[i]} (fuse{i}) 0x{current:02X} -> "
+                     f"0x{wanted[i]:02X}")
+
+    cmds = [f"fuse{i}:w:0x{v:02X}:m" for i, v in sorted(wanted.items())]
+    step("write " + ", ".join(f"fuse{i}" for i in sorted(wanted)))
+    rc, out = _avrdude_retry(base + [x for c in cmds for x in ("-U", c)],
+                             args.dry_run, "fuses")
+    if not args.dry_run and rc:
+        die(f"avrdude failed ({rc})"
+            + (f"\n{out.strip()}" if out.strip() else ""))
+    if not args.dry_run:
+        ok("wrote " + ", ".join(f"{AVR8X_FUSES[i]}=0x{wanted[i]:02X}"
+                                for i in sorted(wanted)))
+        data = _read_fuse_block(base, False)
+        for line in _avr8x_report(data):
+            info(line)
+    return 0
+
+
 def cmd_fuses(args, cfg):
     proj = project_of(args)
     if proj.arch == "arm":
         die("a Cortex-M part has no fuse bytes — fuses are an AVR concept")
     require("avrdude", args.dry_run)
+    if is_avr8x(proj.mcu):
+        return _fuses_avr8x(proj, args)
+
+    if args.fuse:
+        die("--fuse NAME=HEX is the AVR8X spelling; classic AVR8 parts take "
+            "--lfuse/--hfuse/--efuse")
     base = _avrdude(proj, args)
 
     wanted = {}
@@ -509,8 +681,19 @@ def _sim_base(proj: Project, args) -> list:
     return ["simavr", "-m", args.mcu or proj.mcu, "-f", str(args.freq or proj.freq)]
 
 
+def no_simulator(proj: Project):
+    """AVR8X (megaAVR 0 / tinyAVR) is not emulated: simavr has classic AVR8 cores
+    only, so sim/board/debug/trace have nothing to run there."""
+    if proj.arch == "avr" and is_avr8x(proj.mcu):
+        die(f"simavr has no {proj.mcu} core: AVR8X parts are not emulated, so "
+            f"sim/board/debug/trace do not apply.\n"
+            f"     this part is bench-only: mcu flash --method icsp --programmer "
+            f"atmelice_updi && mcu monitor")
+
+
 def cmd_sim(args, cfg):
     proj = project_of(args)
+    no_simulator(proj)
     fw = firmware_of(proj, args)
     require("simavr", args.dry_run)
     caps = simavr_caps()
@@ -554,6 +737,7 @@ def cmd_sim(args, cfg):
 
 def cmd_board(args, cfg):
     proj = project_of(args)
+    no_simulator(proj)
     fw = firmware_of(proj, args)
     periph = peripherals_of(args, cfg)
     binary = harness.build(proj, periph,
@@ -578,6 +762,7 @@ def cmd_debug(args, cfg):
         return _debug_hw(proj, args)
     if proj.arch != "avr":
         die("simulated debug is AVR-only (simavr + avr-gdb); use --hw for a probe")
+    no_simulator(proj)
 
     fw = firmware_of(proj, args)
     caps = simavr_caps()
@@ -657,6 +842,7 @@ DEFAULT_TRACES = ["PORTB=sram8@0x25", "PORTD=sram8@0x2B", "SECONDS=sram16@0x100"
 
 def cmd_trace(args, cfg):
     proj = project_of(args)
+    no_simulator(proj)
     fw = firmware_of(proj, args)
     require("simavr", args.dry_run)
     caps = simavr_caps()

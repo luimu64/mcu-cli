@@ -89,6 +89,29 @@ ISP cannot reach the chip then. That case needs the debugWIRE session itself
 high-voltage programmer. `RSTDISBL` instead of DWEN is worse: RESET becomes a plain I/O
 pin and only HVPP recovers it, which the Atmel-ICE cannot do.
 
+**ATmega4809 / AVR8X: `could not read lfuse`, `-p m328p`, or `usbasp` does not answer.**
+AVR8X has no `lfuse`/`hfuse`/`efuse` and no ISP: the fuses are one block
+(`fuse0…fuse8` @0x1280) and the part is entered over UPDI. Name the UPDI programmer —
+there is nothing to fall back on:
+
+```sh
+mcu fuses --programmer atmelice_updi                 # read the block
+mcu fuses --programmer atmelice_updi --fuse OSCCFG=0x7F
+mcu flash --method icsp --programmer atmelice_updi
+```
+
+`--lfuse/--hfuse/--efuse` and `--dwen` are refused with the byte each one became
+(clock → `OSCCFG`, system bits → `SYSCFG0`/`SYSCFG1`, DWEN → no equivalent). On a
+bare chip, UPDI needs no clock and no reset, but it does need the UPDI pin free: PA0
+doubles as RESET when `SYSCFG0.RSTPINCFG=1`, and getting back in then takes the
+debugger's "UPDI enable with fuse override" sequence — `mcu fuses` warns before such a
+write. If an AVR8X part is set up as a UPDI *port* (`UPDIPINCFG`, tinyAVR 2-series),
+the pin is no longer UPDI at all and only that part's recovery path applies.
+
+**AVR8X and `sim`/`board`/`debug`/`trace` say "simavr has no atmega4809 core".** Correct:
+simavr emulates classic AVR8 only. Flash the part and use `mcu monitor`; the scaffold's
+demo heartbeat prints `tick` once per loop precisely so the UART proves it is alive.
+
 ## Monitor
 
 **Garbage characters.** Baud mismatch, or the board is running on a different clock

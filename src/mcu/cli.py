@@ -18,6 +18,7 @@ examples:
   mcu flash --method icsp --programmer atmelice_isp -B 10    bare chip via ISP
   mcu fuses                                                  read lfuse/hfuse/efuse
   mcu fuses --programmer atmelice_isp -B 10 --dwen on        enable debugWIRE (DWEN)
+  mcu fuses --programmer atmelice_updi --fuse SYSCFG0=0xF6    AVR8X over UPDI (fuse0..8)
   mcu board --led D13 --button D2 --press 1.5s:150ms --rx 1.2s:abc --seconds 8
   mcu debug -x 'break main' -x continue -x bt --batch
   mcu trace --seconds 3 -o ports.vcd
@@ -146,6 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lfuse", metavar="HEX", help="write the low fuse, e.g. 0xFF")
     p.add_argument("--hfuse", metavar="HEX", help="write the high fuse, e.g. 0xD9")
     p.add_argument("--efuse", metavar="HEX", help="write the extended fuse, e.g. 0xFF")
+    p.add_argument("--fuse", action="append", metavar="NAME=HEX",
+                   help="AVR8X only: write one fuse0..fuse9 byte by name, e.g. "
+                        "--fuse SYSCFG0=0xF6 (repeatable; names: WDTCFG, BODCFG, "
+                        "OSCCFG, TCD0CFG, SYSCFG0, SYSCFG1, APPEND, BOOTEND)")
     p.add_argument("--dwen", choices=["on", "off"], metavar="{on,off}",
                    help="enable/disable the debugWIRE (DWEN) bit of hfuse: read "
                         "the current hfuse, flip bit 6, write it back")
