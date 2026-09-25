@@ -104,6 +104,7 @@ Nothing plugged in? Everything except `flash`/`monitor` still works, and
 | `clean` | remove `build/` and generated simulation sources |
 | `size` | flash/RAM report (`avr-size --format=avr`, or `arm-none-eabi-size`) |
 | `flash` | `avrdude -c arduino` (bootloader), a programmer via `--method icsp` (default `-c usbasp`, `--programmer` for anything else), or `pyocd flash` for ARM |
+| `fuses` | read `lfuse`/`hfuse`/`efuse` (`avrdude -U`), write them, and flip the debugWIRE `DWEN` bit with `--dwen on\|off` |
 | `monitor` | `picocom` on the autodetected port |
 | `sim` | plain simavr run (colourised library UART output) |
 | `board` | simavr **plus peripherals**: LEDs, buttons, scripted/injected serial |
@@ -182,10 +183,47 @@ avrdude's default is too fast and the chip answers nothing. Start at `-B 10` and
 speed up once it works. If the low fuse already selects a crystal, the crystal and its
 load capacitors must be fitted or the chip has no clock at all.
 
-Fuses are deliberately not modelled here — `avrdude -U lfuse:w:…` is the tool for that,
-and a wrong low fuse is how a chip stops answering ISP. For the record, the
-ATmega328P defaults are `lfuse=0x62, hfuse=0xD9, efuse=0xFF` (internal 8 MHz ÷8,
-SPIEN on) and `0xFF/0xD9/0xFF` selects a full-swing 16 MHz crystal.
+## Fuses and debugWIRE (DWEN)
+
+`mcu fuses` reads and writes the three fuse bytes; `--dwen` flips the one bit that
+switches a classic AVR8 between ISP and debugWIRE. Unprogrammed = 1, programmed = 0, so
+**DWEN programmed means bit 6 of hfuse is cleared** (ATmega328P: `0xD9` → `0x99`).
+
+```sh
+mcu fuses --programmer atmelice_isp -B 10             # read + decode
+mcu fuses --programmer atmelice_isp -B 10 --dwen on   # enable debugWIRE
+mcu fuses --programmer atmelice_isp -B 10 --dwen off  # back to ISP
+mcu fuses --programmer atmelice_isp -B 10 --lfuse 0xFF --hfuse 0xD9 --efuse 0xFF
+```
+
+```
+$ mcu fuses --programmer atmelice_isp -B 10
+==> read fuses
+lfuse=0x62 hfuse=0xD9 efuse=0xFF
+     hfuse bits, classic AVR order: RSTDISBL=1 DWEN=1 SPIEN=0 WDTON=1 EESAVE=1 BOOTSZ1=0 BOOTSZ0=0 BOOTRST=1
+     DWEN unprogrammed (debugWIRE off); SPIEN programmed (ISP usable)
+```
+
+- `--dwen on|off` is a read-modify-write: it reads the current hfuse first (so only bit 6
+  moves, whatever else the chip has set), writes it back and reads all three again.
+  It is idempotent — an hfuse already in the wanted state is not written.
+- **DWEN takes ISP away.** Once it is programmed and the target is power-cycled,
+  debugWIRE owns RESET and ISP is unreachable *even with SPIEN programmed*. Flash and
+  EEPROM stay programmable over debugWIRE (`-c atmelice_dw`); fuses do not — avrdude
+  reports `ISP activation failed, trying debugWIRE` and `Please restart avrdude without
+  power-cycling the target`. `mcu` recognises that, warns and retries once, which is the
+  documented way through. `mcu flash` over ISP points at `mcu fuses --dwen off` when it
+  fails for the same reason.
+- `--dwen off` refuses to write when SPIEN is unprogrammed, because ISP cannot reach the
+  chip any more: disable debugWIRE from inside a debugWIRE session instead
+  (`avrdude -c atmelice_dw -p m328p -t`, then `monitor debugwire disable`).
+- `RSTDISBL` (hfuse bit 7) turns RESET into an I/O pin and kills both interfaces, and
+  DWEN **plus** lock bits has no software way back: those need a high-voltage programmer
+  (STK500, AVR Dragon) — the Atmel-ICE has no HVPP/HVSP.
+- The bit positions above are the classic AVR8 (mega/tiny) map. ATmega328P defaults are
+  `lfuse=0x62, hfuse=0xD9, efuse=0xFF` (internal 8 MHz ÷ 8, SPIEN on) and
+  `0xFF/0xD9/0xFF` selects a full-swing 16 MHz crystal. Read the datasheet table before
+  writing anything — a wrong low fuse is how a chip stops answering ISP.
 
 ## Configuration
 

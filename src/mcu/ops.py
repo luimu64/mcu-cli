@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 
 from . import config as cfgmod
@@ -303,9 +304,191 @@ def cmd_flash(args, cfg):
         die(f"unknown flash method '{method}'")
 
     step(f"flash via {method}")
-    run(cmd, dry=args.dry_run)
+    rc, _ = run(cmd, dry=args.dry_run, check=False)
+    if rc:
+        if method.startswith("icsp"):
+            warn("ISP failed — if this chip has DWEN programmed, debugWIRE owns "
+                 "RESET and ISP cannot be entered: `mcu fuses --dwen off` prepares "
+                 "the target and retries, and so does running avrdude again "
+                 "without power-cycling")
+        die(f"avrdude failed ({rc})")
     if not args.dry_run:
         ok("flashed")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# fuses (debugWIRE / DWEN lives here)
+# --------------------------------------------------------------------------
+
+# Classic AVR8 (mega/tiny) hfuse bit map. Programmed = 0, unprogrammed = 1;
+# other families move these bits around, hence the part note in the output.
+HFUSE_BITS = (("RSTDISBL", 7), ("DWEN", 6), ("SPIEN", 5), ("WDTON", 4),
+              ("EESAVE", 3), ("BOOTSZ1", 2), ("BOOTSZ0", 1), ("BOOTRST", 0))
+DWEN_BIT = 6
+SPIEN_BIT = 5
+FUSES = ("lfuse", "hfuse", "efuse")
+
+# avrdude says this when it had to reset a debugWIRE-locked target to get at ISP
+# at all; the documented follow-up is to run the same command again (the target
+# stays prepared until it is power-cycled).
+_DW_RETRY_MARKERS = ("trying debugWIRE", "power-cycling the target")
+
+
+def _avrdude(args_proj, args) -> list:
+    """Base avrdude argv: programmer, part, ISP clock, port."""
+    prog = args.programmer or "usbasp"
+    part = args.part or ("m328p" if args_proj.mcu == "atmega328p" else args_proj.mcu)
+    cmd = ["avrdude", "-c", prog, "-p", part]
+    if args.bitclock:
+        cmd += ["-B", f"{args.bitclock:g}"]
+    if args.port:
+        cmd += ["-P", args.port]
+    return cmd
+
+
+def _avrdude_retry(cmd, dry, what):
+    """Run avrdude, retrying once after it prepared a debugWIRE target.
+
+    A chip with DWEN programmed answers no ISP until the probe interrupts the
+    debugWIRE session; avrdude does that itself and then asks to be run again
+    without power-cycling. Doing it here keeps the FW/SW switch-over a one-liner.
+    """
+    rc, out = run(cmd, dry=dry, capture=not dry, check=False)
+    if not dry and rc and any(m in out for m in _DW_RETRY_MARKERS):
+        warn("target is in debugWIRE mode: avrdude prepared it for ISP, retrying")
+        rc, out = run(cmd, capture=True, check=False)
+    if not dry and rc and os.environ.get("MCU_VERBOSE"):
+        info(out.rstrip())
+    return rc, out
+
+
+def _fuse_value(text, name) -> int:
+    try:
+        value = int(str(text), 0)
+    except ValueError:
+        die(f"cannot parse {name} '{text}' (use 0xFF or 255)")
+    if not 0 <= value <= 0xFF:
+        die(f"{name} is one byte: 0x00-0xFF")
+    return value
+
+
+def _read_fuse(base, mem, dry):
+    """Read one fuse byte back from the chip.
+
+    avrdude's raw format (`r`) puts exactly that byte in the file, so there is no
+    text format (0xff vs FF vs 255) to guess at.
+    """
+    if dry:
+        run(base + ["-U", f"{mem}:r:<tmpfile>:r"], dry=True)
+        return None
+    with tempfile.TemporaryDirectory(prefix="mcu-fuse-") as td:
+        path = os.path.join(td, mem)
+        rc, out = _avrdude_retry(base + ["-U", f"{mem}:r:{path}:r"], dry, mem)
+        if rc:
+            die(f"could not read {mem} (avrdude exit {rc})"
+                + (f"\n{out.strip()}" if out.strip() else ""))
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            data = b""
+        if not data:
+            die(f"avrdude reported success but wrote no {mem} data — check the "
+                f"programmer id, the wiring and the ISP clock (-B)")
+        return data[0]
+
+
+def _hfuse_report(value) -> list:
+    bits = " ".join(f"{n}={value >> b & 1}" for n, b in HFUSE_BITS)
+    dwen = "unprogrammed (debugWIRE off)" if value >> DWEN_BIT & 1 \
+        else "PROGRAMMED (debugWIRE on)"
+    spien = "programmed (ISP usable)" if not value >> SPIEN_BIT & 1 \
+        else "unprogrammed (ISP disabled)"
+    return [f"     hfuse bits, classic AVR order: {bits}",
+            f"     DWEN {dwen}; SPIEN {spien}"]
+
+
+def cmd_fuses(args, cfg):
+    proj = project_of(args)
+    if proj.arch == "arm":
+        die("a Cortex-M part has no fuse bytes — fuses are an AVR concept")
+    require("avrdude", args.dry_run)
+    base = _avrdude(args, args)
+
+    wanted = {}
+    for name in FUSES:
+        text = getattr(args, name, None)
+        if text is not None:
+            wanted[name] = _fuse_value(text, name)
+
+    if args.dwen and "hfuse" in wanted:
+        die("--dwen derives hfuse from the chip's current value — don't pass "
+            "--hfuse as well")
+
+    if not wanted and not args.dwen:                      # read
+        step("read fuses")
+        if args.dry_run:
+            for m in FUSES:
+                _read_fuse(base, m, True)
+            return 0
+        values = {m: _read_fuse(base, m, False) for m in FUSES}
+        info(f"lfuse=0x{values['lfuse']:02X} hfuse=0x{values['hfuse']:02X} "
+             f"efuse=0x{values['efuse']:02X}")
+        for line in _hfuse_report(values["hfuse"]):
+            info(line)
+        return 0
+
+    if args.dwen:                                         # read-modify-write
+        step(f"read hfuse to {'set' if args.dwen == 'on' else 'clear'} DWEN")
+        if args.dry_run:
+            _read_fuse(base, "hfuse", True)
+            info(f"     the value written follows from that read: DWEN is bit "
+                 f"{DWEN_BIT}, 0 = programmed = debugWIRE enabled")
+            return 0
+        current = _read_fuse(base, "hfuse", False)
+        if args.dwen == "on":
+            new = current & ~(1 << DWEN_BIT)
+        else:
+            if current >> SPIEN_BIT & 1:
+                die("SPIEN is unprogrammed on this part, so ISP cannot reach it "
+                    "even without DWEN.\n     disable debugWIRE from inside a "
+                    "debugWIRE session instead (avrdude -c atmelice_dw -p <part> -t, "
+                    "then `monitor debugwire disable`), or use a high-voltage "
+                    "programmer (STK500/Dragon — the Atmel-ICE has no HVPP/PP)")
+            new = current | (1 << DWEN_BIT)
+        if new == current:
+            ok(f"hfuse=0x{current:02X} already has DWEN "
+               f"{'programmed' if args.dwen == 'on' else 'unprogrammed'} — "
+               f"nothing written")
+        else:
+            wanted["hfuse"] = new
+            info(f"hfuse 0x{current:02X} -> 0x{new:02X}")
+            if args.dwen == "on":
+                warn("DWEN programmed: ISP is taken over by debugWIRE as soon as "
+                     "the target is power-cycled")
+                warn("flash over ISP first — afterwards flash/EEPROM stay "
+                     "programmable over debugWIRE, but fuses do not")
+
+    cmds = [f"{m}:w:0x{v:02X}:m" for m, v in wanted.items() if wanted[m] is not None]
+    if not cmds:
+        return 0
+    step("write " + ", ".join(m for m in wanted))
+    rc, out = _avrdude_retry(base + [x for c in cmds for x in ("-U", c)],
+                             args.dry_run, "fuses")
+    if not args.dry_run and rc:
+        die(f"avrdude failed ({rc})"
+            + (f"\n{out.strip()}" if out.strip() else ""))
+    if not args.dry_run:
+        ok("wrote " + ", ".join(f"{m}=0x{wanted[m]:02X}" for m in wanted))
+        values = {m: _read_fuse(base, m, False) for m in FUSES}
+        info(f"read back: lfuse=0x{values['lfuse']:02X} "
+             f"hfuse=0x{values['hfuse']:02X} efuse=0x{values['efuse']:02X}")
+        if args.dwen == "on":
+            info("     next: power-cycle the target, then debug over debugWIRE "
+                 "(-c atmelice_dw, or dw-gdbserver on a serial probe)")
+        elif args.dwen == "off":
+            info("     next: power-cycle the target — ISP works again")
     return 0
 
 

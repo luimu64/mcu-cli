@@ -96,7 +96,7 @@ class TestCliWiring(unittest.TestCase):
 
     def test_parser_has_all_commands(self):
         cmds = {"doctor", "list", "new", "build", "clean", "size",
-                "flash", "monitor", "sim", "board", "debug", "trace"}
+                "flash", "fuses", "monitor", "sim", "board", "debug", "trace"}
         got = set(cli.build_parser()._subparsers._group_actions[0].choices)
         self.assertEqual(cmds, got)
 

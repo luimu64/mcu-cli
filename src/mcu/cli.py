@@ -16,6 +16,8 @@ examples:
   mcu new blink --led D13 --button D2        scaffold a project
   mcu build && mcu flash && mcu monitor      the normal hardware loop
   mcu flash --method icsp --programmer atmelice_isp -B 10    bare chip via ISP
+  mcu fuses                                                  read lfuse/hfuse/efuse
+  mcu fuses --programmer atmelice_isp -B 10 --dwen on        enable debugWIRE (DWEN)
   mcu board --led D13 --button D2 --press 1.5s:150ms --rx 1.2s:abc --seconds 8
   mcu debug -x 'break main' -x continue -x bt --batch
   mcu trace --seconds 3 -o ports.vcd
@@ -139,6 +141,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-f", "--file", help="file to flash (default build/*.hex)")
     add_common(p, suppress=True)
     p.set_defaults(func=ops.cmd_flash)
+
+    p = sub.add_parser("fuses", help="read or write AVR fuses (debugWIRE/DWEN)")
+    p.add_argument("--lfuse", metavar="HEX", help="write the low fuse, e.g. 0xFF")
+    p.add_argument("--hfuse", metavar="HEX", help="write the high fuse, e.g. 0xD9")
+    p.add_argument("--efuse", metavar="HEX", help="write the extended fuse, e.g. 0xFF")
+    p.add_argument("--dwen", choices=["on", "off"], metavar="{on,off}",
+                   help="enable/disable the debugWIRE (DWEN) bit of hfuse: read "
+                        "the current hfuse, flip bit 6, write it back")
+    p.add_argument("--programmer", metavar="ID",
+                   help="avrdude -c id (default usbasp), e.g. atmelice_isp, "
+                        "atmelice_dw, usbasp, dragon_isp")
+    p.add_argument("-B", "--bitclock", type=float, metavar="US",
+                   help="ISP SCK period in microseconds (avrdude -B)")
+    p.add_argument("--port", help="avrdude -P (usb for most USB probes)")
+    p.add_argument("--part", help="avrdude part (default derived from the project MCU)")
+    add_common(p, suppress=True)
+    p.set_defaults(func=ops.cmd_fuses)
 
     p = sub.add_parser("monitor", help="serial console")
     p.add_argument("--port", help="serial port (autodetected)")

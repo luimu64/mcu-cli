@@ -70,11 +70,24 @@ never powers the target.
 probe's VID:PID (`03eb` is Microchip/Atmel) with `MODE="0660", GROUP="plugdev"`, then
 `udevadm control --reload-rules` and unplug/replug — the rule only applies at plug time.
 
-**Fuses.** `mcu` never writes fuses. Read them first and write them deliberately —
-a wrong `hfuse` on a board with a bootloader bricks the bootloader, not the chip, but
-recovering needs ICSP. Setting `DWEN` (debugWIRE) is the nastiest one: it takes the
-RESET pin away from SPI, so clearing it needs a debugWIRE session (with SPIEN still
-programmed) or high-voltage programming, which the Atmel-ICE cannot do.
+**Fuses.** Read them before writing them — a wrong `hfuse` on a board with a bootloader
+costs you the bootloader, and a wrong `lfuse` can leave the chip without a clock at all.
+`mcu fuses --programmer ID -B 10` reads and decodes all three; writing takes explicit
+values (`--lfuse 0xFF --hfuse 0xD9 --efuse 0xFF`) and reads them back afterwards.
+
+**`ISP activation failed, trying debugWIRE` / `restart avrdude without power-cycling`.**
+The chip has `DWEN` programmed, so debugWIRE owns RESET and ISP cannot be entered even
+though `SPIEN` is programmed. avrdude has already reset the debugWIRE session for you:
+run the same command again *without* power-cycling and it connects over ISP. `mcu fuses`
+does that retry itself; `mcu flash` warns and tells you to run `mcu fuses --dwen off`.
+Flash and EEPROM stay writable over debugWIRE (`-c atmelice_dw`), but fuses do not.
+
+**Turning debugWIRE back off.** `mcu fuses --programmer atmelice_isp --dwen off` reads
+hfuse, clears DWEN and writes it back — and refuses to if `SPIEN` is unprogrammed, since
+ISP cannot reach the chip then. That case needs the debugWIRE session itself
+(`avrdude -c atmelice_dw -p m328p -t`, then `monitor debugwire disable`) or a
+high-voltage programmer. `RSTDISBL` instead of DWEN is worse: RESET becomes a plain I/O
+pin and only HVPP recovers it, which the Atmel-ICE cannot do.
 
 ## Monitor
 

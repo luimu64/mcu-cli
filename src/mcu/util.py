@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import NoReturn
 
 # --------------------------------------------------------------------------
 # terminal output
@@ -28,7 +29,7 @@ else:
     C_OK = C_WARN = C_ERR = C_DIM = C_OFF = ""
 
 
-def die(msg: str, code: int = 1):
+def die(msg: str, code: int = 1) -> NoReturn:
     print(f"{C_ERR}mcu: {msg}{C_OFF}", file=sys.stderr)
     sys.exit(code)
 

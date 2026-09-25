@@ -7,6 +7,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ### Added
 
+- `mcu fuses` — read `lfuse`/`hfuse`/`efuse` (`avrdude -U …:r:…:r`, so there is no
+  avrdude text format to guess at) and decode hfuse; write explicit values
+  (`--lfuse 0xFF --hfuse 0xD9 --efuse 0xFF`, avrdude's immediate `:m` format) and read
+  them back afterwards. Fuses are no longer "not modelled".
+- `mcu fuses --dwen {on,off}` — the debugWIRE switch, as a read-modify-write of hfuse
+  bit 6 (DWEN): it reads the chip first, so only that bit moves; it is idempotent, and it
+  refuses `off` when SPIEN is unprogrammed instead of writing a chip ISP can no longer
+  reach. Enabling DWEN warns that ISP is taken over at the next power cycle.
+- Programming a DWEN chip over ISP now works in one invocation: avrdude's
+  `ISP activation failed, trying debugWIRE` / `restart avrdude without power-cycling`
+  answer is recognised, warned about and the command is retried once — that retry is the
+  documented sequence. `mcu flash` over ISP points at `mcu fuses --dwen off` when it
+  fails instead.
 - `mcu flash --programmer ID` picks the avrdude programmer for `--method icsp` instead
   of the hard-coded `usbasp`, so an Atmel-ICE (`atmelice_isp` for SPI/ISP,
   `atmelice_dw` for a debugWIRE session), a JTAGICE3 (`jtag3isp`), an AVR Dragon or any
