@@ -42,8 +42,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - `mcu build` on an AVR8X project now checks that the installed avr-gcc actually knows the
   part (one empty compile) and says so in words — "this avr-gcc has no atmega4809 device
   spec … needs avr-gcc ≥ 8, this one is 7.3.0" — instead of letting the build die with
-  `device-specs/specs-atmega4809: No such file or directory`. Ubuntu 22.04's avr-gcc
-  7.3.0 is exactly that case.
+  `device-specs/specs-atmega4809: No such file or directory` (7.3.0 is the version CI's
+  Ubuntu image ships, so that path is exercised for real).
 - `mcu fuses` — read `lfuse`/`hfuse`/`efuse` (`avrdude -U …:r:…:r`, so there is no
   avrdude text format to guess at) and decode hfuse; write explicit values
   (`--lfuse 0xFF --hfuse 0xD9 --efuse 0xFF`, avrdude's immediate `:m` format) and read

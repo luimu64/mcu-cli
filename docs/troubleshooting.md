@@ -114,11 +114,11 @@ demo heartbeat prints `tick` once per loop precisely so the UART proves it is al
 
 **`mcu build` says "this avr-gcc has no atmega4809 device spec".** The toolchain is older
 than the silicon: megaAVR 0-series and tinyAVR 0/1/2-series need avr-gcc ≥ 8, and distro
-packages can be far behind (Ubuntu 22.04 ships 7.3.0, which has no `atmega4809` device
-spec at all — the raw symptom is `device-specs/specs-atmega4809: No such file or
-directory`). Install a newer AVR toolchain (`brew install avr-gcc`, a distro with
-`gcc-avr` ≥ 8, or Microchip's own toolchain) — the generated code is not the problem.
-`mcu doctor` will show the version you have.
+packages can be far behind (7.3.0 ships without an `atmega4809` device spec at all — the
+raw symptom is `device-specs/specs-atmega4809: No such file or directory`, which is what
+`mcu` now catches and translates). Install a newer AVR toolchain (`brew install avr-gcc`,
+a distro with `gcc-avr` ≥ 8, or Microchip's own toolchain) — the generated code is not the
+problem. `mcu doctor` shows the version you have.
 
 ## Monitor
 
