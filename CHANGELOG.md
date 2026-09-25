@@ -19,6 +19,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - `--programmer`/`-B` are rejected for the bootloader method and on ARM projects
   instead of being silently ignored.
 
+### Changed
+
+- The scaffolded `src/main.c` is much shorter and now marks the one block you are
+  meant to replace: pin/UART/interrupt plumbing above, a `YOUR CODE HERE` region in
+  `main()` holding the minimal demo (heartbeat, button press, serial echo) that
+  `mcu sim`/`mcu board` need to show something out of the box. The old demo
+  (`blink_enabled`/`button_events`, `tick <n>` counter, upper-casing RX echo), the
+  no-op `__AVR_ATmega328P__` guard and `ctype.h` are gone, the two init helpers are
+  folded into one `io_init()`, and the Cortex-M `main.c` carries the same marker. The
+  AVR scaffold now builds to ~530 bytes instead of ~2100.
+
 ### Fixed
 
 - `mcu debug` / `mcu sim --gdb` failed on simavr builds without the `-g <port>` form

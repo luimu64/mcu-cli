@@ -82,30 +82,26 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
 AVR_MAIN = """\
 /*
- * @NAME@ — bare-metal AVR (avr-libc only, no Arduino core).
+ * @NAME@ — bare-metal AVR skeleton (avr-libc only, no Arduino core).
  *
  *   @LED_LABEL@ LED -> P@LED_PORT@@LED_BIT@
- *   TXD -> PD1, RXD -> PD0 : UART, @BAUD@ Bd
  *   @BTN_LABEL@ button -> P@BTN_PORT@@BTN_BIT@ : to GND, internal pull-up, PCINT
+ *   TXD -> PD1, RXD -> PD0 : UART, @BAUD@ Bd
  *
- * Build with `mcu build`, simulate with `mcu board --led @LED_LABEL@ --button @BTN_LABEL@`.
+ * `mcu build`, simulate with `mcu board --led @LED_LABEL@ --button @BTN_LABEL@`.
+ * Everything above the marked block is the plumbing the CLI and the generated
+ * board harness rely on; your firmware goes inside the block in main().
  */
 
 #ifndef F_CPU
 #define F_CPU @FREQ@UL
 #endif
-
-#ifndef __AVR_ATmega328P__
-/* The demo targets the ATmega328P; delete this guard for other parts. */
-#endif
-
 #define BAUD @BAUD@UL
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <util/delay.h>
 #include <stdio.h>
-#include <ctype.h>
+#include <util/delay.h>
 
 #define LED_PORT  PORT@LED_PORT@
 #define LED_DDR   DDR@LED_PORT@
@@ -117,8 +113,7 @@ AVR_MAIN = """\
 #define BTN_BIT   @BTN_BIT@
 
 /* Double-speed (U2X) divisor: UBRR = F_CPU / (8 * BAUD) - 1.
- * At 16 MHz/115200 that is 16 -> 117647 Bd, +2.1 % (same as the Arduino core).
- * Single speed would need UBRR 8 -> 111111 Bd, -3.5 %: out of spec. */
+ * 16 MHz/115200 -> 117647 Bd, +2.1 % (single speed would be -3.5 %). */
 #define UBRR_VAL ((F_CPU / (8UL * BAUD)) - 1UL)
 
 static int uart_putchar(char c, FILE *stream)
@@ -133,31 +128,15 @@ static int uart_putchar(char c, FILE *stream)
 }
 static FILE uart_stdout = FDEV_SETUP_STREAM(uart_putchar, NULL, _FDEV_SETUP_WRITE);
 
-static void uart_init(void)
+static void io_init(void)
 {
     UBRR0H = (uint8_t)(UBRR_VAL >> 8);
-    UBRR0L = (uint8_t)(UBRR_VAL & 0xFF);
+    UBRR0L = (uint8_t)UBRR_VAL;
     UCSR0A = _BV(U2X0);
     UCSR0B = _BV(TXEN0) | _BV(RXEN0);
     UCSR0C = _BV(UCSZ01) | _BV(UCSZ00);      /* 8 data bits, no parity, 1 stop */
-}
 
-/* The ISR only latches state: printing from interrupt context is not safe and a
- * polling loop would miss a short press. */
-volatile uint8_t blink_enabled = 1;
-volatile uint8_t button_events;
-
-ISR(PCINT@PCINT_GROUP@_vect)
-{
-    if (BTN_PIN & _BV(BTN_BIT)) {
-        return;                              /* pull-up high = released */
-    }
-    blink_enabled = !blink_enabled;
-    button_events++;
-}
-
-static void button_init(void)
-{
+    LED_DDR |= _BV(LED_BIT);
     BTN_DDR &= (uint8_t)~_BV(BTN_BIT);
     BTN_PORT |= _BV(BTN_BIT);                /* internal pull-up */
     PCMSK@PCINT_GROUP@ |= _BV(PCINT@PCINT_NUM@);
@@ -165,38 +144,38 @@ static void button_init(void)
     sei();
 }
 
+/* The ISR only latches the event: printing from interrupt context is not safe,
+ * and a polling loop would miss a short press. */
+volatile uint8_t button_pressed;
+
+ISR(PCINT@PCINT_GROUP@_vect)
+{
+    if (!(BTN_PIN & _BV(BTN_BIT))) {         /* pull-up high = released */
+        button_pressed = 1;
+    }
+}
+
 int main(void)
 {
-    uart_init();
-    LED_DDR |= _BV(LED_BIT);
-    button_init();
-
-    fprintf(&uart_stdout, "\\n@NAME@ up: %lu Hz\\n", (unsigned long)F_CPU);
-
-    uint8_t led_on = 0;
-    uint16_t seconds = 0;
+    io_init();
 
     for (;;) {
-        if (button_events) {
-            button_events = 0;
-            fprintf(&uart_stdout, "button: heartbeat %s\\n",
-                    blink_enabled ? "resumed" : "paused");
+        /* ---------------------- YOUR CODE HERE ----------------------
+         * Demo heartbeat, so `mcu board` / `mcu sim` show something
+         * before you write yours: replace this whole block.
+         */
+        if (button_pressed) {
+            button_pressed = 0;
+            fprintf(&uart_stdout, "press\\n");
         }
-
-        led_on = blink_enabled ? !led_on : 0;
-        if (led_on) {
-            LED_PORT |= _BV(LED_BIT);
-            fprintf(&uart_stdout, "tick %u\\n", seconds++);
-        } else {
-            LED_PORT &= (uint8_t)~_BV(LED_BIT);
-        }
-
-        if (UCSR0A & _BV(RXC0)) {             /* echo serial input, upper-cased */
-            char c = (char)UDR0;
-            uart_putchar(toupper((unsigned char)c), &uart_stdout);
+        if (UCSR0A & _BV(RXC0)) {            /* demo: echo serial input */
+            uart_putchar(UDR0, &uart_stdout);
             uart_putchar('\\n', &uart_stdout);
         }
+        LED_PORT ^= _BV(LED_BIT);
+        fprintf(&uart_stdout, "tick\\n");
         _delay_ms(500);
+        /* ---------------------- END OF DEMO ---------------------- */
     }
 }
 """
@@ -352,22 +331,17 @@ ARM_MAIN = """\
  * @NAME@ — bare-metal Cortex-M skeleton (@CPU@).
  *
  * No vendor HAL, no startup assembly: see src/startup.c for the vector table.
- * Add peripheral init here; `mcu build` produces .elf/.bin/.hex and a size report.
+ * `mcu build` produces .elf/.bin/.hex and a size report.
  */
 
 #include <stdint.h>
 
-/* replace with your part's header when you add peripherals, e.g.
- * #include "samd21.h"  or  #include "stm32f103xb.h"
- * #include "Drivers/Device/Device.h"
- */
-
-volatile uint32_t counter;
+/* Your part's peripheral header goes here, e.g. "samd21.h", "stm32f103xb.h". */
 
 int main(void)
 {
     for (;;) {
-        counter++;
+        /* ---------------------- YOUR CODE HERE ---------------------- */
     }
 }
 """

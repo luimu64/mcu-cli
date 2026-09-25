@@ -59,6 +59,13 @@ class TestAvrScaffold(unittest.TestCase):
         self.assertIn("#define LED_PORT  PORTB", src)   # D13 -> PB5
         self.assertIn("#define LED_BIT   5", src)
 
+    def test_main_marks_the_replaceable_block(self):
+        """The scaffold is plumbing + one marked demo block: keep it short and
+        keep the marker greppable, or the generated code stops being a template."""
+        src = self.read("src/main.c")
+        self.assertEqual(src.count("YOUR CODE HERE"), 1)
+        self.assertLess(len(src.splitlines()), 100)
+
     def test_clock_and_baud_reach_the_code(self):
         src = self.read("src/main.c")
         self.assertIn("F_CPU 16000000UL", src)
@@ -126,6 +133,11 @@ class TestArmScaffold(unittest.TestCase):
         self.assertTrue(any("samd.elf" in entry.get("program", "")
                             or "samd.elf" in entry.get("program-binary", "")
                             for entry in data))
+
+    def test_main_is_a_marked_skeleton(self):
+        src = self.read("src/main.c")
+        self.assertEqual(src.count("YOUR CODE HERE"), 1)
+        self.assertLess(len(src.splitlines()), 25)
 
     def test_no_tokens_left(self):
         for rel in ("CMakeLists.txt", "samd.ld", "src/main.c", "README.md"):

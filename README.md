@@ -7,22 +7,29 @@ AVR and Cortex-M, from one command, without a vendor IDE.
 
 ```
 $ mcu board --led D13 --button D2 --press 1.5s:150ms --rx 1.2s:abc --seconds 8
-board: build/blinky.elf (atmega328p @ 16000000 Hz)
-  leds:1  buttons:1  uart:on
+  leds:1  buttons:1  uart:on   keys: 'b' press, 'q' quit, other = serial RX
   --------------------------------------------------------------
-[led         9.08 ms] D13   -> ON   (PORTB=0x20)
-tick 0
-[led       510.58 ms] D13   -> off  (PORTB=0x00)
+[led         0.02 ms] D13   -> ON   (PORTB=0x20)
+tick
+[led       500.96 ms] D13   -> off  (PORTB=0x00)
+tick
+[led      1001.91 ms] D13   -> ON   (PORTB=0x20)
+tick
 [uart_rx  1200.00 ms] inject "abc"
 [button   1500.00 ms] press PD2 (hold 150 ms)
-button: heartbeat paused
-[led      1516.63 ms] D13   -> off  (PORTB=0x00)
-A
-B
-C
-[button   3500.00 ms] press PD2 (hold 150 ms)
-button: heartbeat resumed
+press
+a
+[led      1504.54 ms] D13   -> off  (PORTB=0x00)
+tick
+button_auto_release
+b
+[led      2006.05 ms] D13   -> ON   (PORTB=0x20)
+tick
+c
 ```
+
+`tick`/`press`/`a` come from the scaffolded firmware's demo block; the `[led …]` and
+`[button …]` lines come from the generated harness.
 
 ## Why
 
@@ -78,6 +85,11 @@ mcu flash                                 # USB bootloader; --method icsp for IC
 mcu monitor                               # serial console (autodetects the port)
 ```
 
+The generated `src/main.c` is a working skeleton: pin/UART/interrupt plumbing you keep,
+plus one block marked `YOUR CODE HERE` — a demo heartbeat (`tick`, `press`, serial echo)
+that exists so `sim`/`board` have something to show. Replace that block with your own
+firmware; everything above it is what the CLI and the board harness expect.
+
 Nothing plugged in? Everything except `flash`/`monitor` still works, and
 `mcu flash --dry-run` shows exactly what would be sent.
 
@@ -131,7 +143,7 @@ hook and why: [docs/simulator.md](docs/simulator.md).
 
 ```sh
 mcu debug                                                   # interactive gdb
-mcu debug --batch -x 'break uart_init' -x continue -x bt -x 'x/1xb 0x8000C4'
+mcu debug --batch -x 'break uart_putchar' -x continue -x bt -x 'x/1xb 0x8000C4'
 mcu trace --seconds 3 -o ports.vcd                          # PORTB/PORTD/SECONDS
 mcu trace --signal 'PB5=portpin@0x5/0x42' --seconds 2
 ```
